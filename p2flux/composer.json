@@ -1,0 +1,18 @@
+{
+    "name": "p2flux/blesta",
+    "description": "P2Flux gateway for Blesta: non-custodial USDC payments and subscriptions on Base.",
+    "license": "MIT",
+    "type": "blesta-gateway-nonmerchant",
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "blesta/composer-installer": "~1.0"
+    },
+    "authors": [
+        {
+            "name": "P2Flux",
+            "homepage": "https://p2flux.com"
+        }
+    ]
+}

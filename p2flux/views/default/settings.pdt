@@ -1,0 +1,38 @@
+<div class="mb-3">
+    <label for="p2flux_recipient" class="form-label">
+        <?php $this->_('P2flux.recipient'); ?>
+        <i class="bi bi-info-circle ms-1" data-bs-toggle="tooltip" title="<?php echo $this->Html->safe($this->_('P2flux.recipient_note', true)); ?>"></i>
+    </label>
+    <?php $this->Form->fieldText('recipient', ($meta['recipient'] ?? null), ['id' => 'p2flux_recipient', 'class' => 'form-control', 'placeholder' => '0x…', 'autocomplete' => 'off', 'spellcheck' => 'false']); ?>
+</div>
+<div class="mb-3">
+    <?php
+    $this->Form->label($this->_('P2flux.environment', true), 'p2flux_environment', ['class' => 'form-label']);
+    $this->Form->fieldSelect('environment', $environments, ($meta['environment'] ?? 'live'), ['id' => 'p2flux_environment', 'class' => 'form-select']);
+    ?>
+</div>
+<div class="form-check mb-2">
+    <?php $this->Form->fieldCheckbox('gas_mode', 'true', (($meta['gas_mode'] ?? 'false') === 'true'), ['id' => 'p2flux_gas_mode', 'class' => 'form-check-input']); ?>
+    <label class="form-check-label" for="p2flux_gas_mode"><?php $this->_('P2flux.gas_mode'); ?></label>
+    <div class="form-text"><?php $this->_('P2flux.gas_mode_note'); ?></div>
+</div>
+<div class="form-check mb-3">
+    <?php $this->Form->fieldCheckbox('subscriptions', 'true', (($meta['subscriptions'] ?? 'true') === 'true'), ['id' => 'p2flux_subscriptions', 'class' => 'form-check-input']); ?>
+    <label class="form-check-label" for="p2flux_subscriptions"><?php $this->_('P2flux.subscriptions'); ?></label>
+    <div class="form-text"><?php $this->_('P2flux.subscriptions_note'); ?></div>
+</div>
+<div class="mb-3">
+    <label for="p2flux_callback_base" class="form-label">
+        <?php $this->_('P2flux.callback_base'); ?>
+        <i class="bi bi-info-circle ms-1" data-bs-toggle="tooltip" title="<?php echo $this->Html->safe($this->_('P2flux.callback_base_note', true)); ?>"></i>
+    </label>
+    <?php $this->Form->fieldText('callback_base', ($meta['callback_base'] ?? null), ['id' => 'p2flux_callback_base', 'class' => 'form-control', 'placeholder' => 'https://billing.example.com/callback/gw']); ?>
+</div>
+<div class="mb-3">
+    <div class="form-label"><?php $this->_('P2flux.callback_url'); ?></div>
+    <code><?php echo $this->Html->safe($callback_url); ?></code>
+</div>
+<?php if (($meta['environment'] ?? 'live') === 'test') { ?>
+<div class="alert alert-warning"><?php $this->_('P2flux.test_mode'); ?></div>
+<?php } ?>
+<div class="form-text"><?php $this->_('P2flux.refunds'); ?></div>

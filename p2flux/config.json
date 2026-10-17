@@ -1,0 +1,17 @@
+{
+    "version": "1.0.0",
+    "name": "P2flux.name",
+    "description": "P2flux.description",
+    "authors": [
+        {
+            "name": "P2Flux",
+            "url": "https://p2flux.com"
+        }
+    ],
+    "currencies": ["USD"],
+    "signup_url": "https://p2flux.com/docs/blesta.html",
+    "logo": {
+        "light": "views/default/images/logo.svg",
+        "dark": "views/default/images/logo-dark.svg"
+    }
+}

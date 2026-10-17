@@ -1,0 +1,69 @@
+<?php
+// Client pay page (Bootstrap 4 client portal). The buttons open P2Flux's checkout in a popup; when the
+// payment is sent, the checkout tells this page the transaction and this page hands it to the gateway
+// callback, which asks the P2Flux API before anything is recorded. Without JavaScript the buttons are
+// plain links and the P2Flux webhook records the payment.
+$p2flux_id = 'p2flux-' . bin2hex(random_bytes(4));
+?>
+<div id="<?php echo $p2flux_id; ?>" class="p2flux-pay">
+    <a href="<?php echo $this->Html->safe($pay_url); ?>" class="btn btn-success p2flux-open" target="_blank" rel="opener">
+        <?php $this->_('P2flux.pay'); ?>
+    </a>
+    <?php if (!empty($subscribe_url)) { ?>
+    <a href="<?php echo $this->Html->safe($subscribe_url); ?>" class="btn btn-outline-success p2flux-open p2flux-subscribe" target="_blank" rel="opener">
+        <?php echo $this->Html->safe($this->_('P2flux.subscribe', true, $every)); ?>
+    </a>
+    <div class="small text-muted mt-1"><?php $this->_('P2flux.subscribe_note'); ?></div>
+    <?php } ?>
+    <?php if (!empty($test_mode)) { ?>
+    <div class="small text-warning mt-1"><?php $this->_('P2flux.test_notice'); ?></div>
+    <?php } ?>
+    <div class="p2flux-status small mt-2" aria-live="polite"></div>
+</div>
+<script>
+(function () {
+    var root = document.getElementById(<?php echo json_encode($p2flux_id); ?>);
+    var origin = <?php echo json_encode($origin); ?>;
+    var callback = <?php echo json_encode($callback_url); ?>;
+    var received = <?php echo json_encode($return_url); ?>;
+    var text = {
+        waiting: <?php echo json_encode($this->_('P2flux.waiting', true)); ?>,
+        confirming: <?php echo json_encode($this->_('P2flux.confirming', true)); ?>,
+        blocked: <?php echo json_encode($this->_('P2flux.popup_blocked', true)); ?>
+    };
+    var status = root.querySelector('.p2flux-status');
+    var popup = null;
+    var done = false;
+
+    root.querySelectorAll('.p2flux-open').forEach(function (button) {
+        button.addEventListener('click', function (e) {
+            e.preventDefault();
+            if (popup && !popup.closed) { popup.focus(); return; }
+            popup = window.open(button.href, 'p2flux-' + Math.random().toString(36).slice(2), 'popup,width=480,height=760');
+            status.textContent = popup ? text.waiting : text.blocked;
+        });
+    });
+
+    window.addEventListener('message', function (e) {
+        // Only the checkout we opened, on its own origin.
+        if (!popup || e.source !== popup || e.origin !== origin || !e.data || done) return;
+        var data = e.data;
+        if (data.type === 'p2flux.ready') {
+            popup.postMessage({ type: 'p2flux.hello' }, origin);
+            return;
+        }
+        var hash = /^0x[0-9a-fA-F]{64}$/;
+        var ref = /^0x[0-9a-fA-F]{64}$/;
+        if (data.type === 'p2flux.payment.completed' && hash.test(data.tx_hash || '') && ref.test(data.reference || '')) {
+            done = true;
+            status.textContent = text.confirming;
+            root.querySelectorAll('.p2flux-open').forEach(function (b) { b.classList.add('disabled'); b.setAttribute('aria-disabled', 'true'); });
+            window.location.href = callback + (callback.indexOf('?') === -1 ? '?' : '&') + 'r=' + encodeURIComponent(data.reference) + '&tx=' + encodeURIComponent(data.tx_hash);
+        } else if (data.type === 'p2flux.subscription.created') {
+            done = true;
+            status.textContent = text.confirming;
+            if (received) window.location.href = received;
+        }
+    });
+})();
+</script>

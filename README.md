@@ -23,7 +23,7 @@ and a Blesta address that P2Flux can reach over **https** for confirmations.
 | Network | Base Mainnet (real USDC) or Base Sepolia (test, no real money). Each payment keeps the network it was started on. |
 | Buyers can pay without ETH | Clients pay the network cost in USDC; a fixed 0.10 USDC per payment comes out of your amount. |
 | Offer automatic payment for recurring services | Shows "Pay automatically every …" on invoices of recurring services. |
-| Public callback base URL | Behind a proxy or tunnel, or when the server answers more than one hostname: the public `https://…/callback/gw` address. Otherwise the company's hostname is used. |
+| Public callback base URL | Behind a proxy or tunnel, or when the server answers more than one hostname: the public `https://…/callback/gw` address P2Flux sends its confirmations to. Otherwise the company's hostname is used. The client's own browser always uses the address Blesta is opened at. |
 
 ## How it works
 
@@ -42,16 +42,27 @@ payment to the client's account and applied to the open renewal invoice by Blest
 365 days. The client can stop at any time from the P2Flux payment page; if you cancel the service in
 Blesta, the next charge that still arrives is kept as credit and collection is stopped.
 
-**Switching the network or the wallet** in the settings invalidates every payment page and payment
-started before: a payment made on the other network is never recorded. Pay pages are valid for a day.
+**Switching the network or the wallet** in the settings invalidates every payment page started
+before; pay pages are valid for a day. A test payment is never recorded once the gateway is on
+Mainnet. (Real payments made while the gateway was temporarily switched to test mode are still
+recorded: each payment is checked on the network it was made on.)
 
-**One subscription per invoice offer.** The first wallet that subscribes through a client's link is
-that client's; anyone else who subscribes through the same link is stopped and never credited.
+**One subscription per link.** Each automatic payment uses its own P2Flux link. The first wallet that
+subscribes through it is the client's; anyone else who subscribes through the same link is stopped and
+never credited. A client who stops and later subscribes again gets a new link of their own.
 If P2Flux cannot reach Blesta for longer than its retry window (about 18 hours) and a newer period is
 collected meanwhile, the older period is not recorded automatically: the gateway log shows it as
 `NOT_CURRENT`, and the P2Flux overview lists every charge. A cancelled service is recognised from the
 invoice's service lines; an invoice without a service line keeps collecting until the client stops it.
-Uninstalling the gateway stops all active subscriptions first.
+Uninstalling the gateway stops all active subscriptions first. Its records (which wallet payment
+belongs to which invoice) are kept unless it is the last P2Flux gateway installed; unpaid payment
+records are removed a month after they expired.
+
+**Troubleshooting.** Every confirmation is in Blesta's gateway log (Tools > Logs > Gateway). If a
+payment shows there as confirmed but no transaction appears in Blesta (Blesta refused it, for example
+because the client was deleted), add the transaction by hand with the transaction hash from the log.
+A warning "no webhook for this payment" means P2Flux could not watch that payment: it is then recorded
+when the client's browser returns.
 
 **Refunds.** Blesta cannot send a P2Flux refund: a refund is a transfer from your own wallet. Use the
 P2Flux refund page, or for automatic payments send it to an address the client gives you.
@@ -61,6 +72,8 @@ P2Flux refund page, or for automatic payments send it to an address the client g
 ```
 dev/vendor-sdk.sh ../p2flux_sdk_php v0.12.0   # vendor the PHP SDK (namespace rewritten)
 php tests/bridge.php                           # pure rules
+php tests/gateway.php                          # the gateway on a stand-in for Blesta, offline
+php tests/flows.php                            # whole flows against a scripted P2Flux API
 dev/docker-compose.yml                         # local Blesta 6 (needs the Blesta zip and a licence)
 tests/harness/                                 # a stand-in for Blesta's classes, to run the gateway
                                                # against the P2Flux test API without Blesta

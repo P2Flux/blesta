@@ -106,6 +106,9 @@ final class HarnessRecord
     {
         [$f, $op, $v] = $c;
         $have = $row[$f] ?? null;
+        if ($op === '>' || $op === '<') {
+            return $have !== null && ($op === '>' ? $have > $v : $have < $v);
+        }
         $eq = $v === null ? $have === null : (string) ($have ?? '') === (string) $v;
 
         return $op === '!=' ? !$eq : $eq;
@@ -139,6 +142,17 @@ final class HarnessRecord
         $this->q = [];
 
         return $rows ? (object) $rows[0] : false;
+    }
+    public function delete()
+    {
+        $all = $this->load();
+        $t = $this->q['table'];
+        $before = count($all[$t] ?? []);
+        $all[$t] = array_values(array_filter($all[$t] ?? [], fn ($r) => !$this->matches($r)));
+        $this->save($all);
+        $this->q = [];
+
+        return new class ($before - count($all[$t])) { public function __construct(private int $n) {} public function rowCount(): int { return $this->n; } };
     }
     public function insert($t, array $row) { $all = $this->load(); $all[$t][] = $row; $this->save($all); }
     /** Like PDO: returns a statement whose rowCount() is the number of rows changed. Locked, so parallel
@@ -192,5 +206,12 @@ abstract class NonmerchantGateway
     public function loadConfig($file) { json_decode(file_get_contents($file), true, 512, JSON_THROW_ON_ERROR); }
     public function makeView(...$a) { return new HarnessView(); }
     public function getCommonError($type) { return ['gateway' => [$type => $type]]; }
-    public function log($url, $data = null, $direction = 'input', $success = false) { $this->logs[] = [$direction, $success, $data]; }
+    /** Like Blesta's: Logs::addGateway refuses an empty URL (and a gateway that no longer exists), and log() throws. */
+    public function log($url, $data = null, $direction = 'input', $success = false)
+    {
+        if ($url === null || $url === '') {
+            throw new Exception('log() without a URL');
+        }
+        $this->logs[] = [$direction, $success, $data];
+    }
 }

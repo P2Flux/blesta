@@ -1,0 +1,2 @@
+# The Dockerfile copies nothing: an empty build context (dev/blesta and dev/data are large, and dev/data is owned by the database user).
+*

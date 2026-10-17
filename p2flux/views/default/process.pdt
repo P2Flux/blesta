@@ -57,13 +57,12 @@ $js = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
             popup.postMessage({ type: 'p2flux.hello' }, origin);
             return;
         }
-        var hash = /^0x[0-9a-fA-F]{64}$/;
-        var ref = /^0x[0-9a-fA-F]{64}$/;
-        if (data.type === 'p2flux.payment.completed' && hash.test(data.tx_hash || '') && ref.test(data.reference || '')) {
+        var bytes32 = /^0x[0-9a-fA-F]{64}$/;
+        if (data.type === 'p2flux.payment.completed' && bytes32.test(data.tx_hash || '') && bytes32.test(data.reference || '')) {
             done = true;
             status.textContent = text.confirming;
             root.querySelectorAll('.p2flux-open').forEach(function (b) { b.classList.add('disabled'); b.setAttribute('aria-disabled', 'true'); });
-            window.location.href = callback + (callback.indexOf('?') === -1 ? '?' : '&') + 'r=' + encodeURIComponent(data.reference) + '&tx=' + encodeURIComponent(data.tx_hash);
+            window.location.href = callback + '&r=' + encodeURIComponent(data.reference) + '&tx=' + encodeURIComponent(data.tx_hash);
         } else if (data.type === 'p2flux.subscription.created') {
             done = true;
             status.textContent = text.confirming;

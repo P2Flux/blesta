@@ -384,6 +384,7 @@ class P2flux extends NonmerchantGateway
         if ($period > 0 && $this->anyServiceCanceled($record)) {
             // The service was cancelled in Blesta: keep the money as credit and stop further collection.
             $stopped = $client->stopPaymentLink((string) $record->manage, (string) $subscriber['subscription_id']);
+            $this->Record->where('id', '=', $record->id)->update(self::TABLE, ['state' => (string) ($stopped['state'] ?? 'stopped')]);
             $this->log($this->requestUri(), json_encode(['stopped' => $stopped]), 'output', true);
         }
 

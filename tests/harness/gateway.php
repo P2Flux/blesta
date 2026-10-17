@@ -4,12 +4,18 @@ require __DIR__ . '/blesta.php';
 require __DIR__ . '/../../p2flux/p2flux.php';
 
 final class HarnessRedirect extends Exception {}
+final class HarnessPage extends Exception {}
 
 final class HarnessGateway extends P2flux
 {
     protected function redirect(string $url): void
     {
         throw new HarnessRedirect($url);
+    }
+
+    protected function page(string $key)
+    {
+        throw new HarnessPage($key);
     }
 }
 

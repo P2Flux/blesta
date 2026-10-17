@@ -12,7 +12,7 @@ API key to set up.
 2. In Blesta: **Settings > Company > Payment Gateways > Available**, install **P2Flux (USDC)**.
 3. Enter your Base wallet address, choose the network, save.
 
-Requirements: Blesta 6 (PHP 8.2+ with curl), invoices in **USD** (USDC is a US-dollar stablecoin),
+Requirements: Blesta 6 (PHP 8.1+ with curl), invoices in **USD** (USDC is a US-dollar stablecoin),
 and a Blesta address that P2Flux can reach over **https** for confirmations.
 
 ## Settings
@@ -23,7 +23,7 @@ and a Blesta address that P2Flux can reach over **https** for confirmations.
 | Network | Base Mainnet (real USDC) or Base Sepolia (test, no real money). Each payment keeps the network it was started on. |
 | Buyers can pay without ETH | Clients pay the network cost in USDC; a fixed 0.10 USDC per payment comes out of your amount. |
 | Offer automatic payment for recurring services | Shows "Pay automatically every …" on invoices of recurring services. |
-| Public callback base URL | Only behind a proxy or tunnel: the public `https://…/callback/gw` address. |
+| Public callback base URL | Behind a proxy or tunnel, or when the server answers more than one hostname: the public `https://…/callback/gw` address. Otherwise the company's hostname is used. |
 
 ## How it works
 
@@ -41,6 +41,17 @@ payment to the client's account and applied to the open renewal invoice by Blest
 **Auto Apply Credits** (on by default). P2Flux bills on fixed intervals: a month is 30 days, a year
 365 days. The client can stop at any time from the P2Flux payment page; if you cancel the service in
 Blesta, the next charge that still arrives is kept as credit and collection is stopped.
+
+**Switching the network or the wallet** in the settings invalidates every payment page and payment
+started before: a payment made on the other network is never recorded. Pay pages are valid for a day.
+
+**One subscription per invoice offer.** The first wallet that subscribes through a client's link is
+that client's; anyone else who subscribes through the same link is stopped and never credited.
+If P2Flux cannot reach Blesta for longer than its retry window (about 18 hours) and a newer period is
+collected meanwhile, the older period is not recorded automatically: the gateway log shows it as
+`NOT_CURRENT`, and the P2Flux overview lists every charge. A cancelled service is recognised from the
+invoice's service lines; an invoice without a service line keeps collecting until the client stops it.
+Uninstalling the gateway stops all active subscriptions first.
 
 **Refunds.** Blesta cannot send a P2Flux refund: a refund is a transfer from your own wallet. Use the
 P2Flux refund page, or for automatic payments send it to an address the client gives you.

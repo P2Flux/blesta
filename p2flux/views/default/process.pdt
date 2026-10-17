@@ -4,6 +4,11 @@
 // callback, which asks the P2Flux API before anything is recorded. Without JavaScript the buttons are
 // plain links and the P2Flux webhook records the payment.
 $p2flux_id = 'p2flux-' . bin2hex(random_bytes(4));
+if (!empty($unavailable)) {
+    echo '<div class="small text-muted">' . $this->Html->safe($this->_('P2flux.unavailable', true)) . '</div>';
+    return;
+}
+$js = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
 ?>
 <div id="<?php echo $p2flux_id; ?>" class="p2flux-pay">
     <a href="<?php echo $this->Html->safe($pay_url); ?>" class="btn btn-success p2flux-open" target="_blank" rel="opener">
@@ -23,13 +28,13 @@ $p2flux_id = 'p2flux-' . bin2hex(random_bytes(4));
 <script>
 (function () {
     var root = document.getElementById(<?php echo json_encode($p2flux_id); ?>);
-    var origin = <?php echo json_encode($origin); ?>;
-    var callback = <?php echo json_encode($callback_url); ?>;
-    var received = <?php echo json_encode($return_url); ?>;
+    var origin = <?php echo json_encode($origin, $js); ?>;
+    var callback = <?php echo json_encode($callback_url, $js); ?>;
+    var received = <?php echo json_encode($return_url, $js); ?>;
     var text = {
-        waiting: <?php echo json_encode($this->_('P2flux.waiting', true)); ?>,
-        confirming: <?php echo json_encode($this->_('P2flux.confirming', true)); ?>,
-        blocked: <?php echo json_encode($this->_('P2flux.popup_blocked', true)); ?>
+        waiting: <?php echo json_encode($this->_('P2flux.waiting', true), $js); ?>,
+        confirming: <?php echo json_encode($this->_('P2flux.confirming', true), $js); ?>,
+        blocked: <?php echo json_encode($this->_('P2flux.popup_blocked', true), $js); ?>
     };
     var status = root.querySelector('.p2flux-status');
     var popup = null;

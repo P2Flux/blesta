@@ -63,5 +63,18 @@ check('short wallet refused', !P2fluxBridge::validWallet('0x1234'));
 check('id is 32 hex', preg_match('/^[0-9a-f]{32}$/', P2fluxBridge::newId()) === 1);
 check('environments', P2fluxBridge::apiUrl('test') === 'https://api-test.p2flux.com' && P2fluxBridge::checkoutOrigin('live') === 'https://pay.p2flux.com');
 
+// Review additions.
+check('label mentioning p2flux dropped', P2fluxBridge::label('Pay P2Flux here') === null);
+check('label with dot then letter dropped', P2fluxBridge::label('see v1.a') === null && P2fluxBridge::label('v1.2 plan') === 'v1.2 plan');
+check('units of 0 is 0', P2fluxBridge::units('0') === 0);
+check('zero-amount invoice line kept as 0.00', P2fluxBridge::invoices([['id' => 3, 'amount' => 0]]) === [['id' => '3', 'amount' => '0.00']]);
+check('bad term refused', P2fluxBridge::periodSeconds('x', 'month') === null);
+check('string recurring amount accepted', P2fluxBridge::canSubscribe(true, '10.00', ['amount' => '10.00', 'term' => '1', 'period' => 'month']));
+check('recur without amount refused', !P2fluxBridge::canSubscribe(true, 10.0, ['term' => 1, 'period' => 'month']));
+check('token with extra dot refused', P2fluxBridge::open('k1', $t . '.x') === null);
+check('invalid UTF-8 description does not throw', is_string(P2fluxBridge::sign('k', ['d' => "\xff\xfe"])));
+check('offer ignores expiry', P2fluxBridge::offer(['a' => '1', 'x' => 1]) === P2fluxBridge::offer(['x' => 2, 'a' => '1']));
+check('offer differs by amount', P2fluxBridge::offer(['a' => '1']) !== P2fluxBridge::offer(['a' => '2']));
+
 echo $failures === 0 ? "\nbridge: all checks passed\n" : "\nbridge: {$failures} FAILED\n";
 exit($failures === 0 ? 0 : 1);

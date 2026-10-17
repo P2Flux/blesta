@@ -22,6 +22,9 @@ $lang['P2flux.refunds'] = 'Refunds are sent from your own wallet on the P2Flux r
 $lang['P2flux.!error.recipient.valid'] = 'Enter the Base wallet address that receives payments (0x followed by 40 characters).';
 $lang['P2flux.!error.environment.valid'] = 'Choose Base Mainnet or Base Sepolia.';
 $lang['P2flux.!error.callback_base.valid'] = 'The callback base must be an https address ending in /callback/gw, or empty.';
+$lang['P2flux.!error.start.stale'] = 'This payment page is out of date. Close this window, reload the invoice and pay from there.';
+$lang['P2flux.paid_already'] = 'This invoice has already been paid with USDC. You can close this window.';
+$lang['P2flux.unavailable'] = 'USDC payment is not available for this invoice. Please choose another payment method or contact us.';
 $lang['P2flux.!error.start.config'] = 'This payment cannot be created. Please contact us.';
 $lang['P2flux.!error.start.unavailable'] = 'The payment service is unreachable right now. Please try again in a minute.';
 

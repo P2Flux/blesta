@@ -65,6 +65,7 @@ class P2flux extends NonmerchantGateway
                 ->setField('expires', ['type' => 'int', 'size' => 10, 'unsigned' => true, 'default' => 0])
                 ->setKey(['id'], 'primary')
                 ->setKey(['token_hash'], 'index')
+                ->setKey(['reference'], 'index')
                 ->create(self::TABLE, true);
         } catch (Exception $e) {
             $this->Input->setErrors(['db' => ['create' => $e->getMessage()]]);
@@ -73,6 +74,19 @@ class P2flux extends NonmerchantGateway
 
     public function uninstall($gateway_id, $last_instance)
     {
+        /* The links keep charging buyers' wallets after the gateway is gone, and their manage tokens live
+         * only in this table: stop this company's active subscriptions first (best effort). */
+        $company = (int) Configure::get('Blesta.company_id');
+        $rows = $this->Record->select()->from(self::TABLE)->where('kind', '=', 'subscribe')->where('company_id', '=', $company)->fetchAll();
+        foreach ($rows as $row) {
+            if (!empty($row->subscription_id) && !in_array($row->state, ['stopped', 'ended'], true)) {
+                try {
+                    $this->client((string) $row->env)->stopPaymentLink((string) $row->manage, (string) $row->subscription_id);
+                } catch (Throwable $e) {
+                    $this->log(null, json_encode(['stop_on_uninstall' => $row->subscription_id, 'error' => $e->getMessage()]), 'output', false);
+                }
+            }
+        }
         // The records are the only proof of which wallet payment belongs to which invoice: kept unless
         // this is the last P2Flux gateway installed anywhere.
         if ($last_instance) {
@@ -157,10 +171,19 @@ class P2flux extends NonmerchantGateway
             'i' => P2fluxBridge::invoices($invoice_amounts),
             'a' => P2fluxBridge::decimal($amount),
             'e' => $env,
-            'd' => (string) ($options['description'] ?? ''),
+            // The wallet and network at render time: a switch in the settings invalidates open pay pages.
+            'r' => strtolower((string) ($this->meta['recipient'] ?? '')),
+            'd' => mb_substr((string) ($options['description'] ?? ''), 0, 80),
+            // The page renders fresh links on every visit; an old one stops working after a day.
+            'x' => time() + 86400,
         ];
         $this->view = $this->makeView('process', 'default', str_replace(ROOTWEBDIR, '', dirname(__FILE__) . DS));
         Loader::loadHelpers($this, ['Form', 'Html']);
+        if ($data['c'] < 1 || !P2fluxBridge::validWallet($data['r'])) {
+            $this->view->set('unavailable', true);
+
+            return $this->view->fetch();
+        }
 
         // Nothing is created at P2Flux until the buyer clicks: this page renders on every visit.
         $this->view->set('pay_url', $this->callbackUrl(['a' => 'pay', 't' => P2fluxBridge::sign($this->key(), $data)]));
@@ -194,6 +217,12 @@ class P2flux extends NonmerchantGateway
 
             return;
         }
+        if ($record->env !== $this->env()) {
+            // Made on the other network (e.g. a test payment after the switch to Mainnet): never recorded.
+            $this->log($this->requestUri(), json_encode(['ignored' => 'network changed', 'record' => $record->env]), 'output', false);
+
+            return;
+        }
         try {
             if ($action === 'return' && $record->kind === 'pay') {
                 return $this->confirmReturn($record, (string) ($get['tx'] ?? ''));
@@ -209,6 +238,9 @@ class P2flux extends NonmerchantGateway
             }
 
             return;
+        } catch (InvalidArgumentException | TypeError $e) {
+            // A malformed request or answer: refused, never a 500.
+            $this->log($this->requestUri(), json_encode(['error' => get_class($e)]), 'output', false);
         }
         $this->Input->setErrors($this->getCommonError('invalid'));
     }
@@ -216,7 +248,9 @@ class P2flux extends NonmerchantGateway
     public function success(array $get, array $post)
     {
         $record = $this->record($get);
-        if (!$record) {
+        /* Only a payment validate() already recorded: anything else (still confirming) shows Blesta's
+         * generic page, so a refresh can never record a pending transaction without an id. */
+        if (!$record || $record->kind !== 'pay' || empty($record->tx_hash)) {
             return;
         }
 
@@ -225,9 +259,8 @@ class P2flux extends NonmerchantGateway
             'amount' => $record->amount,
             'currency' => 'USD',
             'invoices' => json_decode((string) $record->invoices, true) ?: null,
-            // Shown only: the money is recorded by validate() once P2Flux confirms it on chain.
-            'status' => !empty($record->tx_hash) ? 'approved' : 'pending',
-            'transaction_id' => ($record->tx_hash ?? null) ?: null,
+            'status' => 'approved',
+            'transaction_id' => $record->tx_hash,
             'parent_transaction_id' => null,
         ];
     }
@@ -249,14 +282,21 @@ class P2flux extends NonmerchantGateway
     private function start(string $action, string $token)
     {
         $data = P2fluxBridge::open($this->key(), $token);
-        if (!$data || (int) $data['co'] !== (int) Configure::get('Blesta.company_id') || ($action === 'subscribe' && empty($data['p']))) {
-            $this->Input->setErrors($this->getCommonError('invalid'));
-
-            return;
+        $current = (int) ($data['co'] ?? 0) === (int) Configure::get('Blesta.company_id')
+            && ($data['e'] ?? '') === $this->env()
+            && ($data['r'] ?? '') === strtolower((string) ($this->meta['recipient'] ?? ''))
+            && (int) ($data['x'] ?? 0) > time()
+            && ($action === 'pay' || !empty($data['p']));
+        if (!$data || !$current) {
+            // Out of date (an old page, or the settings changed): the client reloads the invoice and pays from there.
+            return $this->page('P2flux.!error.start.stale');
         }
-        $hash = hash('sha256', $action . '|' . $token);
+        $hash = hash('sha256', $action . '|' . P2fluxBridge::offer($data));
         $existing = $this->Record->select()->from(self::TABLE)->where('token_hash', '=', $hash)
             ->order(['created' => 'DESC'])->fetch();
+        if ($action === 'pay' && $existing && ($existing->state ?? '') === 'paid') {
+            return $this->page('P2flux.paid_already');
+        }
         $client = $this->client($data['e']);
 
         try {
@@ -264,39 +304,39 @@ class P2flux extends NonmerchantGateway
                 // An unpaid intent lives an hour: reuse it while a minute is left, so a second click is the same payment.
                 $record = $existing && empty($existing->tx_hash) && (int) ($existing->expires ?? 0) > time() + 60 ? $existing : null;
                 if (!$record) {
-                    $record = $this->newRecord('pay', $hash, $data);
-                    $created = $this->createPayment($client, $data, $record->id);
-                    $this->Record->where('id', '=', $record->id)->update(self::TABLE, [
+                    $id = P2fluxBridge::newId();
+                    $created = $this->createPayment($client, $data, $id);
+                    $record = $this->newRecord($id, 'pay', $hash, $data, [
                         'intent' => $created['intent'], 'reference' => strtolower($created['reference']), 'expires' => (int) $created['expires_at'],
                     ]);
-                    $record->intent = $created['intent'];
                 }
                 $this->redirect($client->checkoutLink('pay', $record->intent));
             }
 
-            // One subscription link per signed offer: a second click opens the same link.
-            $record = $existing ?: $this->newRecord('subscribe', $hash, $data);
-            if (empty($record->link)) {
+            // One subscription link per offer: a second click opens the same link while it lasts.
+            $record = $existing && !empty($existing->link) && (int) ($existing->expires ?? 0) > time() + 60 ? $existing : null;
+            if (!$record) {
+                $id = P2fluxBridge::newId();
                 $link = $client->createPaymentLink(array_filter([
                     'kind' => 'subscription',
                     'recipient' => $this->meta['recipient'],
                     'amount' => $data['a'],
                     'period' => (int) $data['p'],
                     'label' => P2fluxBridge::label($data['d']),
-                    'notify_url' => $this->callbackUrl(['a' => 'hook', 'k' => $record->id]),
+                    'notify_url' => $this->callbackUrl(['a' => 'hook', 'k' => $id]),
                 ], static fn ($v) => $v !== null));
-                $this->Record->where('id', '=', $record->id)->update(self::TABLE, [
-                    'link' => $link['link'], 'manage' => $link['manage'], 'link_id' => strtolower($link['id']),
+                $record = $this->newRecord($id, 'subscribe', $hash, $data, [
+                    'link' => $link['link'], 'manage' => $link['manage'], 'link_id' => substr(strtolower((string) $link['id']), 0, 34),
                     'service_ids' => json_encode($this->serviceIds($data['i'])), 'expires' => (int) $link['expires_at'],
                 ]);
-                $record->link = $link['link'];
             }
-            // The tag ties every subscription event of this signup to this record.
+            // The tag ties the signup of this link to this record.
             $this->redirect($client->checkoutLink('link', $record->link) . '~0x' . $record->id);
         } catch (P2FluxException $e) {
             $this->log($this->requestUri(), json_encode(['status' => $e->status, 'action' => $e->action, 'detail' => $e->raw['detail'] ?? null]), 'output', false);
-            $this->Input->setErrors(['p2flux' => ['start' => Language::_($e->status === 'RECIPIENT_SANCTIONED' || $e->action === 'INVALID_REQUEST'
-                ? 'P2flux.!error.start.config' : 'P2flux.!error.start.unavailable', true)]]);
+
+            return $this->page($e->status === 'RECIPIENT_SANCTIONED' || $e->action === 'INVALID_REQUEST'
+                ? 'P2flux.!error.start.config' : 'P2flux.!error.start.unavailable');
         }
     }
 
@@ -332,8 +372,9 @@ class P2flux extends NonmerchantGateway
         $verdict = $this->client($record->env)->verifyPayment($record->intent, $tx);
         $this->log($this->requestUri(), json_encode($verdict), 'output', ($verdict['valid'] ?? false) === true);
         if (($verdict['valid'] ?? false) !== true) {
-            // Still confirming: nothing recorded now, the webhook (or the next return) records it.
-            if (($verdict['code'] ?? '') !== 'PAYMENT_CONFIRMING') {
+            // Not final yet (confirming, RPC trouble): nothing recorded now, the webhook records it.
+            $action = P2FluxClient::ACTIONS[(string) ($verdict['code'] ?? '')] ?? 'RETRY_LATER';
+            if ($action !== 'WAIT' && $action !== 'RETRY_LATER') {
                 $this->Input->setErrors($this->getCommonError('invalid'));
             }
 
@@ -351,63 +392,102 @@ class P2flux extends NonmerchantGateway
     /** P2Flux's webhook: confirmed with the API by the SDK before anything is recorded. */
     private function confirmHook($record, string $body)
     {
+        $type = (string) (json_decode($body, true)['type'] ?? '');
+        if (($record->kind === 'pay') !== ($type === 'payment.paid') || ($record->kind === 'pay' ? empty($record->reference) : empty($record->link_id))) {
+            return;
+        }
         $client = $this->client($record->env);
         $expect = $record->kind === 'pay'
             ? ['reference' => (string) $record->reference]
             : ['link_id' => (string) $record->link_id, 'manage' => (string) $record->manage];
-        if (($expect['reference'] ?? $expect['link_id']) === '') {
-            return;
-        }
         $result = $client->handleNotification($body, $expect);
+        // Not confirmed is logged as a failure: NOT_CURRENT means a period was missed while Blesta was unreachable.
         $this->log($this->requestUri(), json_encode(['type' => $result['type'], 'confirmed' => $result['confirmed'], 'reason' => $result['reason'] ?? null]), 'output', $result['confirmed']);
         if (!$result['confirmed']) {
-            // Not this record's, not the latest period, or refused: nothing to record (answered 200, not retried).
             return;
         }
         if ($result['type'] === 'payment.paid') {
-            return $this->paid($record, (string) $result['payment']['tx_hash'], (string) $result['payment']['amount']);
+            return $this->paid($record, (string) ($result['payment']['tx_hash'] ?? ''), (string) ($result['payment']['amount'] ?? ''));
         }
 
         $subscriber = $result['subscriber'];
+        $subscription = strtolower((string) ($subscriber['subscription_id'] ?? ''));
+        if (preg_match('/^0x[0-9a-f]{64}$/', $subscription) !== 1) {
+            return;
+        }
+        /* One record, one subscription: the first signup through this client's link is theirs. Anyone else
+         * subscribing through the same (public) link is stopped and never credited to this client. */
+        if (!empty($record->subscription_id) && $record->subscription_id !== $subscription) {
+            $this->stop($client, $record, $subscription, false);
+
+            return;
+        }
+        if (empty($record->subscription_id) && strtolower((string) ($subscriber['tag'] ?? '')) !== '0x' . $record->id) {
+            $this->stop($client, $record, $subscription, false);
+
+            return;
+        }
         $this->Record->where('id', '=', $record->id)->update(self::TABLE, [
-            'subscription_id' => strtolower((string) $subscriber['subscription_id']),
-            'state' => (string) $subscriber['state'],
+            'subscription_id' => $subscription,
+            'state' => substr((string) ($subscriber['state'] ?? ''), 0, 16),
         ]);
         if ($result['type'] !== 'subscription.charged') {
             return;
         }
         $tx = strtolower((string) ($subscriber['last_tx'] ?? ''));
-        if (preg_match('/^0x[0-9a-f]{64}$/', $tx) !== 1) {
+        $period = (int) ($subscriber['last_period'] ?? -1);
+        if (preg_match('/^0x[0-9a-f]{64}$/', $tx) !== 1 || $period < 0 || !$this->claim($record, $tx, (string) ($subscriber['state'] ?? ''))) {
             return;
         }
-        $period = (int) $subscriber['last_period'];
         if ($period > 0 && $this->anyServiceCanceled($record)) {
             // The service was cancelled in Blesta: keep the money as credit and stop further collection.
-            $stopped = $client->stopPaymentLink((string) $record->manage, (string) $subscriber['subscription_id']);
-            $this->Record->where('id', '=', $record->id)->update(self::TABLE, ['state' => (string) ($stopped['state'] ?? 'stopped')]);
-            $this->log($this->requestUri(), json_encode(['stopped' => $stopped]), 'output', true);
+            $this->stop($client, $record, $subscription, true);
         }
 
         return [
             'client_id' => (int) $record->client_id,
+            // Fixed by the link: P2Flux charges exactly this every period.
             'amount' => $record->amount,
             'currency' => 'USD',
             // The signup charge pays the invoice it was started from; renewals become credit, which Blesta
             // applies to the open renewal invoice (Auto Apply Credits).
             'invoices' => $period === 0 ? (json_decode((string) $record->invoices, true) ?: null) : null,
             'status' => 'approved',
-            'reference_id' => strtolower((string) $subscriber['subscription_id']) . ':' . $period,
+            'reference_id' => $subscription . ':' . $period,
             'transaction_id' => $tx,
             'parent_transaction_id' => null,
         ];
+    }
+
+    /** Stop collecting one subscription of this record's link. Never blocks recording money already collected. */
+    private function stop(P2FluxClient $client, $record, string $subscription, bool $own): void
+    {
+        try {
+            $stopped = $client->stopPaymentLink((string) $record->manage, $subscription);
+            if ($own) {
+                $this->Record->where('id', '=', $record->id)->update(self::TABLE, ['state' => substr((string) ($stopped['state'] ?? 'stopped'), 0, 16)]);
+            }
+            $this->log($this->requestUri(), json_encode(['stopped' => $subscription, 'own' => $own]), 'output', true);
+        } catch (P2FluxException $e) {
+            // The next charge event tries again.
+            $this->log($this->requestUri(), json_encode(['stop_failed' => $subscription, 'status' => $e->status]), 'output', false);
+        }
     }
 
     /** A confirmed one-time payment as a Blesta transaction. A different amount is credit, never applied. */
     private function paid($record, string $tx, string $amount)
     {
         $tx = strtolower($tx);
-        $this->Record->where('id', '=', $record->id)->update(self::TABLE, ['tx_hash' => $tx, 'state' => 'paid']);
+        if (preg_match('/^0x[0-9a-f]{64}$/', $tx) !== 1 || P2fluxBridge::units($amount) === null) {
+            $this->Input->setErrors($this->getCommonError('invalid'));
+
+            return;
+        }
         $exact = P2fluxBridge::units($amount) === P2fluxBridge::units($record->amount);
+        if (!$this->claim($record, $tx, $exact ? 'paid' : 'credit')) {
+            // Already recorded by a parallel request (the browser and the webhook often arrive together).
+            return;
+        }
 
         return [
             'client_id' => (int) $record->client_id,
@@ -423,10 +503,10 @@ class P2flux extends NonmerchantGateway
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private function newRecord(string $kind, string $hash, array $data)
+    private function newRecord(string $id, string $kind, string $hash, array $data, array $fields)
     {
-        $record = (object) [
-            'id' => P2fluxBridge::newId(),
+        $row = [
+            'id' => $id,
             'company_id' => (int) $data['co'],
             'kind' => $kind,
             'token_hash' => $hash,
@@ -435,12 +515,23 @@ class P2flux extends NonmerchantGateway
             'amount' => $data['a'],
             'env' => $data['e'],
             'created' => time(),
-            'expires' => 0,
-            'intent' => null, 'reference' => null, 'link' => null, 'link_id' => null, 'manage' => null, 'tx_hash' => null,
-        ];
-        $this->Record->insert(self::TABLE, array_filter((array) $record, static fn ($v) => $v !== null));
+        ] + $fields;
+        $this->Record->insert(self::TABLE, $row);
 
-        return $record;
+        return (object) $row;
+    }
+
+    /**
+     * Mark a transaction as this record's, atomically. False when a parallel request already did: Blesta's
+     * own "same transaction id" check is not atomic, so two answers would be two Blesta payments.
+     */
+    private function claim($record, string $tx, string $state): bool
+    {
+        $statement = $this->Record->where('id', '=', $record->id)
+            ->open()->where('tx_hash', '=', null)->orWhere('tx_hash', '!=', $tx)->close()
+            ->update(self::TABLE, ['tx_hash' => $tx, 'state' => substr($state, 0, 16)]);
+
+        return $statement->rowCount() > 0;
     }
 
     /** This company's record named by `k` (record id, from our own URLs) or `r` (payment reference, from the checkout). */
@@ -506,7 +597,14 @@ class P2flux extends NonmerchantGateway
     private function callbackUrl(array $query, ?array $meta = null): string
     {
         $base = (string) (($meta ?? $this->meta)['callback_base'] ?? '');
-        $base = $base !== '' ? $base . '/' : (string) Configure::get('Blesta.gw_callback_url');
+        $host = (string) (Configure::get('Blesta.company')->hostname ?? '');
+        /* Not the request's Host header: a client must not be able to point P2Flux's notifications at a
+         * host of their choosing. The company's own hostname, unless the admin set a public base. */
+        $base = match (true) {
+            $base !== '' => $base . '/',
+            $host !== '' && defined('WEBDIR') => 'https://' . $host . WEBDIR . 'callback/gw/',
+            default => (string) Configure::get('Blesta.gw_callback_url'),
+        };
 
         return $base . Configure::get('Blesta.company_id') . '/p2flux/' . ($query ? '?' . http_build_query($query) : '');
     }
@@ -514,6 +612,16 @@ class P2flux extends NonmerchantGateway
     private function every(int $term, string $period): string
     {
         return Language::_('P2flux.every.' . $period . ($term === 1 ? '' : 's'), true, $term);
+    }
+
+    /** A one-line page in the popup (our own window): start errors and "already paid" reach the client. */
+    protected function page(string $key)
+    {
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>P2Flux</title>'
+            . '<p style="font:16px/1.5 system-ui,sans-serif;max-width:28em;margin:3em auto;padding:0 1em">'
+            . htmlspecialchars(Language::_($key, true), ENT_QUOTES, 'UTF-8') . '</p>';
+        exit;
     }
 
     protected function redirect(string $url): void

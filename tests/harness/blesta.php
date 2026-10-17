@@ -89,17 +89,45 @@ final class HarnessRecord
     public function drop($t) { $all = $this->load(); unset($all[$t]); $this->save($all); }
     public function select() { $this->q = ['where' => [], 'order' => null]; return $this; }
     public function from($t) { $this->q['table'] = $t; return $this; }
-    public function where($f, $op, $v) { $this->q['where'][] = [$f, $v]; return $this; }
+    /** Conditions: AND between entries; an open()/close() group is OR between its own entries. */
+    public function where($f, $op, $v) { $this->add([$f, $op, $v]); return $this; }
+    public function orWhere($f, $op, $v) { $this->add([$f, $op, $v]); return $this; }
+    public function open() { $this->q['where'][] = ['or' => []]; $this->q['group'] = true; return $this; }
+    public function close() { $this->q['group'] = false; return $this; }
+    private function add(array $c): void
+    {
+        if (!empty($this->q['group'])) {
+            $this->q['where'][array_key_last($this->q['where'])]['or'][] = $c;
+        } else {
+            $this->q['where'][] = $c;
+        }
+    }
+    private static function test(array $row, array $c): bool
+    {
+        [$f, $op, $v] = $c;
+        $have = $row[$f] ?? null;
+        $eq = $v === null ? $have === null : (string) ($have ?? '') === (string) $v;
+
+        return $op === '!=' ? !$eq : $eq;
+    }
     public function order(array $o) { $this->q['order'] = $o; return $this; }
     private function matches(array $row): bool
     {
-        foreach ($this->q['where'] ?? [] as [$f, $v]) {
-            if ((string) ($row[$f] ?? '') !== (string) $v) {
+        foreach ($this->q['where'] ?? [] as $c) {
+            $ok = isset($c['or']) ? (bool) array_filter($c['or'], static fn ($o) => self::test($row, $o)) : self::test($row, $c);
+            if (!$ok) {
                 return false;
             }
         }
 
         return true;
+    }
+    public function fetchAll()
+    {
+        $rows = array_values(array_filter($this->load()[$this->q['table']] ?? [], fn ($r) => $this->matches($r)));
+        $this->q = [];
+
+        return array_map(static fn ($r) => (object) $r, $rows);
     }
     public function fetch()
     {
@@ -113,16 +141,25 @@ final class HarnessRecord
         return $rows ? (object) $rows[0] : false;
     }
     public function insert($t, array $row) { $all = $this->load(); $all[$t][] = $row; $this->save($all); }
+    /** Like PDO: returns a statement whose rowCount() is the number of rows changed. Locked, so parallel
+     * requests in tests behave like MySQL row locks. */
     public function update($t, array $row)
     {
+        $lock = fopen($this->file . '.lock', 'c');
+        flock($lock, LOCK_EX);
         $all = $this->load();
+        $changed = 0;
         foreach ($all[$t] ?? [] as $i => $r) {
             if ($this->matches($r)) {
                 $all[$t][$i] = array_merge($r, $row);
+                $changed++;
             }
         }
         $this->save($all);
+        flock($lock, LOCK_UN);
         $this->q = [];
+
+        return new class ($changed) { public function __construct(private int $n) {} public function rowCount(): int { return $this->n; } };
     }
 }
 

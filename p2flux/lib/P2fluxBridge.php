@@ -18,9 +18,21 @@ final class P2fluxBridge
      */
     public static function sign(string $key, array $data): string
     {
-        $body = rtrim(strtr(base64_encode(json_encode($data, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+        $body = rtrim(strtr(base64_encode(json_encode($data, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE)), '+/', '-_'), '=');
 
         return $body . '.' . hash_hmac('sha256', 'p2flux-blesta|' . $body, $key);
+    }
+
+    /**
+     * What a token offers, without its expiry: the pay page renders a new token on every visit, and every
+     * one of them is the same offer (so a second click reuses the payment, and a paid one stays paid).
+     */
+    public static function offer(array $data): string
+    {
+        unset($data['x']);
+        ksort($data);
+
+        return json_encode($data, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
     }
 
     /** The data inside a token, or null when it was not made with this key or is malformed. */

@@ -1,5 +1,5 @@
 # Local Blesta 6 for developing the P2Flux gateway. Not for production.
-FROM php:8.3-apache
+FROM php:8.3-apache-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgmp-dev libc-client-dev libkrb5-dev libldap2-dev libpng-dev libzip-dev libxml2-dev libicu-dev wget cron \
     && docker-php-ext-configure imap --with-kerberos --with-imap-ssl \

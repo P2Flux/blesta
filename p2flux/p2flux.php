@@ -186,18 +186,18 @@ class P2flux extends NonmerchantGateway
         }
 
         // Nothing is created at P2Flux until the buyer clicks: this page renders on every visit.
-        $this->view->set('pay_url', $this->callbackUrl(['a' => 'pay', 't' => P2fluxBridge::sign($this->key(), $data)]));
+        $this->view->set('pay_url', $this->browserUrl(['a' => 'pay', 't' => P2fluxBridge::sign($this->key(), $data)]));
         $recur = $options['recur'] ?? null;
         if (P2fluxBridge::canSubscribe(($this->meta['subscriptions'] ?? 'true') === 'true', $amount, $recur)) {
             $data['p'] = P2fluxBridge::periodSeconds($recur['term'], $recur['period']);
             $data['t'] = (int) $recur['term'];
             $data['u'] = (string) $recur['period'];
-            $this->view->set('subscribe_url', $this->callbackUrl(['a' => 'subscribe', 't' => P2fluxBridge::sign($this->key(), $data)]));
+            $this->view->set('subscribe_url', $this->browserUrl(['a' => 'subscribe', 't' => P2fluxBridge::sign($this->key(), $data)]));
             $this->view->set('every', $this->every((int) $recur['term'], (string) $recur['period']));
         }
         $this->view->set('origin', P2fluxBridge::checkoutOrigin($env));
         $this->view->set('return_url', (string) ($options['return_url'] ?? ''));
-        $this->view->set('callback_url', $this->callbackUrl(['a' => 'return']));
+        $this->view->set('callback_url', $this->browserUrl(['a' => 'return']));
         $this->view->set('test_mode', $env === 'test');
 
         return $this->view->fetch();
@@ -607,6 +607,16 @@ class P2flux extends NonmerchantGateway
         };
 
         return $base . Configure::get('Blesta.company_id') . '/p2flux/' . ($query ? '?' . http_build_query($query) : '');
+    }
+
+    /**
+     * The callback as the client's browser reaches it: on the address Blesta is being used at, so the
+     * client's session carries over and Blesta can show its "payment received" page. Webhooks use
+     * callbackUrl() (the public base or the company hostname, never the request's Host).
+     */
+    private function browserUrl(array $query): string
+    {
+        return (string) Configure::get('Blesta.gw_callback_url') . Configure::get('Blesta.company_id') . '/p2flux/?' . http_build_query($query);
     }
 
     private function every(int $term, string $period): string

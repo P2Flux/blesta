@@ -1,20 +1,26 @@
-# Blesta 6 on http://localhost:8080 with the gateway mounted from this repository.
+# Blesta 6 on http://localhost with the gateway mounted from this repository.
 #   1. Unzip the Blesta 6 download into dev/blesta/ (not committed).
 #   2. docker compose -f dev/docker-compose.yml up -d --build
-#   3. Open http://localhost:8080/install and use: host db, database blesta, user blesta, password blesta.
+#   3. Open http://localhost/install and use: host db, database blesta, user blesta, password blesta.
 #   4. Settings > Company > Payment Gateways > Available > P2Flux (USDC) > Install.
-# Webhooks need a public https address: run a tunnel to port 8080 and put its
+# Webhooks need a public https address: run a tunnel to port 80 and put its
 # https://<host>/callback/gw into the gateway's "Public callback base URL" setting.
 services:
   web:
     build: .
-    ports: ["8080:80"]
+    # Host network, port 80: the developer licence is valid only for a local installation, which
+    # Blesta recognises when it is reached as http://localhost on the machine itself (not through
+    # Docker's port mapping, and not with a port in the address).
+    network_mode: host
+    extra_hosts: ["db:127.0.0.1"]
     volumes:
       - ./blesta:/var/www/html
       - ../p2flux:/var/www/html/components/gateways/nonmerchant/p2flux:ro
     depends_on: [db]
   cron:
     build: .
+    network_mode: host
+    extra_hosts: ["db:127.0.0.1"]
     volumes:
       - ./blesta:/var/www/html
       - ../p2flux:/var/www/html/components/gateways/nonmerchant/p2flux:ro
@@ -28,5 +34,6 @@ services:
       MARIADB_PASSWORD: blesta
       MARIADB_ROOT_PASSWORD: blesta-root
     command: ["--max-allowed-packet=128M", "--wait-timeout=3600"]
+    ports: ["127.0.0.1:3306:3306"]
     volumes:
       - ./data:/var/lib/mysql

@@ -2,3 +2,8 @@ dev/blesta/
 dev/data/
 dev/*.zip
 *.zip
+dev/admin-login.txt
+dev/api-key.txt
+dev/LICENSE
+dev/README.md
+dev/uploads/

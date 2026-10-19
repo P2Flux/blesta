@@ -7,7 +7,7 @@ API key to set up.
 
 ## Install
 
-1. Download `p2flux-blesta-<version>.zip` from the [releases](https://github.com/P2Flux/blesta/releases)
+1. Download `p2flux-blesta-<version>.zip` from the [Blesta Marketplace](https://marketplace.blesta.com/extension/392) or the [releases](https://github.com/P2Flux/blesta/releases)
    and unpack it into `components/gateways/nonmerchant/` (you get `components/gateways/nonmerchant/p2flux/`).
 2. In Blesta: **Settings > Company > Payment Gateways > Available**, install **P2Flux (USDC)**.
 3. Enter your Base wallet address, choose the network, save.

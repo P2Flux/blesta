@@ -102,6 +102,15 @@ check('signup charge pays the invoice', ($signup['invoices'][0]['id'] ?? '') ===
 $renewal = $hook($meta, $subRow['id'], $charge(1, $owner, 1, $tag));
 check('renewal is credit', is_array($renewal) && $renewal['invoices'] === null && $renewal['transaction_id'] !== $signup['transaction_id']);
 check('the same renewal again answers nothing', $hook($meta, $subRow['id'], $charge(1, $owner, 1, $tag)) === null);
+// A period P2Flux learned from the chain comes without a transaction: still credited, and only once.
+$charge(1, $owner, 2, $tag);
+$api['subscribers'][1][$owner]['last_tx'] = null;
+$body2 = json_encode(['id' => '0x2', 'type' => 'subscription.charged', 'data' => ['link_id' => $hex('link1', 16), 'subscription_id' => $owner, 'period_index' => 2]]);
+$learned = $hook($meta, $subRow['id'], $body2);
+check('a renewal without a transaction is still credited', is_array($learned) && $learned['invoices'] === null && $learned['transaction_id'] === $owner . ':2');
+check('and only once', $hook($meta, $subRow['id'], $body2) === null);
+$next = $hook($meta, $subRow['id'], $charge(1, $owner, 3, $tag));
+check('the next renewal with its transaction is credited again', is_array($next) && $next['transaction_id'] !== $learned['transaction_id']);
 $stranger = $hex('stranger', 32);
 check('a stranger on the same link is not credited', $hook($meta, $subRow['id'], $charge(1, $stranger, 0, $tag)) === null);
 check('...and is stopped', in_array($stranger, $api['stopped'], true));

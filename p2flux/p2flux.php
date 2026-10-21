@@ -471,7 +471,15 @@ class P2flux extends NonmerchantGateway
         }
         $tx = strtolower((string) ($subscriber['last_tx'] ?? ''));
         $period = (int) ($subscriber['last_period'] ?? -1);
-        if (preg_match('/^0x[0-9a-f]{64}$/', $tx) !== 1 || $period < 0 || !$this->claim($record, $tx, (string) ($subscriber['state'] ?? ''))) {
+        if ($period < 0) {
+            return;
+        }
+        /* The claim key is the charge's transaction. A period P2Flux learned from the chain (the client paid
+         * it another way, or an answer was lost) comes without one: then the period itself is the key, so it
+         * is still recorded, and recorded once. (One record holds one subscription, so the period is enough.) */
+        $hashed = preg_match('/^0x[0-9a-f]{64}$/', $tx) === 1;
+        $key = $hashed ? $tx : 'period:' . $period;
+        if (!$this->claim($record, $key, (string) ($subscriber['state'] ?? ''))) {
             return;
         }
         if ($period > 0 && $this->anyServiceCanceled($record)) {
@@ -489,7 +497,7 @@ class P2flux extends NonmerchantGateway
             'invoices' => $period === 0 ? (json_decode((string) $record->invoices, true) ?: null) : null,
             'status' => 'approved',
             'reference_id' => $subscription . ':' . $period,
-            'transaction_id' => $tx,
+            'transaction_id' => $hashed ? $tx : $subscription . ':' . $period,
             'parent_transaction_id' => null,
         ];
     }

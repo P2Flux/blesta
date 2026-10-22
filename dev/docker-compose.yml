@@ -5,6 +5,8 @@
 #   4. Settings > Company > Payment Gateways > Available > P2Flux (USDC) > Install.
 # Webhooks need a public https address: run a tunnel to port 80 and put its
 # https://<host>/callback/gw into the gateway's "Public callback base URL" setting.
+# Its own project name, so another dev/ folder's stack can never reuse these container names.
+name: p2flux-blesta-dev
 services:
   web:
     build: .

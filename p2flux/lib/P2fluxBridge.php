@@ -129,6 +129,17 @@ final class P2fluxBridge
         return $out;
     }
 
+    /**
+     * The invoice ids joined with ',' as P2Flux's merchant_ref, or null when P2Flux would not accept
+     * that as is (more than 64 characters, or a character outside its set - which ',' is).
+     */
+    public static function merchantRef(array $invoices): ?string
+    {
+        $ref = implode(',', array_column($invoices, 'id'));
+
+        return preg_match('~^[A-Za-z0-9._:/#-]{1,64}$~', $ref) === 1 ? $ref : null;
+    }
+
     /** The P2Flux checkout's origin for the environment: messages from the popup are accepted from it only. */
     public static function checkoutOrigin(string $env): string
     {

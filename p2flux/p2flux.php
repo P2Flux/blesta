@@ -374,10 +374,10 @@ class P2flux extends NonmerchantGateway
             'recipient' => $this->meta['recipient'],
             'amount' => $data['a'],
             'notify_url' => $this->callbackUrl(['a' => 'hook', 'k' => $recordId]),
-        ];
+        ] + array_filter(['merchant_ref' => P2fluxBridge::merchantRef($data['i'] ?? [])], 'is_string');
         if (($this->meta['gas_mode'] ?? 'false') === 'true') {
             try {
-                return $client->createPayment($terms + ['gas_payment_mode' => 'payment_token']);
+                return $this->create($client, $terms + ['gas_payment_mode' => 'payment_token']);
             } catch (P2FluxException $e) {
                 // Too small for the fixed network fee, or not offered here: an ordinary payment still works.
                 if (!str_starts_with($e->status, 'PAYMENT_TOKEN_GAS') && $e->status !== 'AMOUNT_OUT_OF_BOUNDS') {
@@ -386,7 +386,26 @@ class P2flux extends NonmerchantGateway
             }
         }
 
-        return $client->createPayment($terms);
+        return $this->create($client, $terms);
+    }
+
+    /**
+     * An API older than merchant_ref refuses the unknown field as INVALID_REQUEST without naming it, and
+     * has no flag that says it is supported: then the same payment is asked for once more without it. A
+     * refusal creates nothing, and a request wrong for another reason is refused again.
+     */
+    private function create(P2FluxClient $client, array $terms): array
+    {
+        try {
+            return $client->createPayment($terms);
+        } catch (P2FluxException $e) {
+            if (!isset($terms['merchant_ref']) || $e->status !== 'INVALID_REQUEST') {
+                throw $e;
+            }
+            unset($terms['merchant_ref']);
+
+            return $client->createPayment($terms);
+        }
     }
 
     /** The buyer's browser reports a transaction: ask the API whether it pays this record's intent. */
@@ -429,6 +448,16 @@ class P2flux extends NonmerchantGateway
         $expect = $record->kind === 'pay'
             ? ['reference' => (string) $record->reference]
             : ['link_id' => (string) $record->link_id, 'manage' => (string) $record->manage];
+        /* A signed webhook (p2flux-signature) is checked first: a bad, stale or unknown-key signature is
+         * refused before the API is asked. The API is asked either way - the signature only says the
+         * message came from P2Flux, the verification says the money arrived. An unsigned webhook (an API
+         * from before signing) is confirmed with the API as before. */
+        $signature = (string) ($_SERVER['HTTP_P2FLUX_SIGNATURE'] ?? '');
+        if ($signature !== '' && function_exists('sodium_crypto_sign_verify_detached')) {
+            $expect['signature'] = $signature;
+        } elseif ($signature !== '') {
+            $this->log($this->requestUri(), json_encode(['warning' => 'signature not checked: PHP has no sodium extension']), 'output', false);
+        }
         $result = $client->handleNotification($body, $expect);
         // Not confirmed is logged as a failure: NOT_CURRENT means a period was missed while Blesta was unreachable.
         $this->log($this->requestUri(), json_encode(['type' => $result['type'], 'confirmed' => $result['confirmed'], 'reason' => $result['reason'] ?? null]), 'output', $result['confirmed']);
@@ -628,7 +657,7 @@ class P2flux extends NonmerchantGateway
 
     protected function client(string $env): P2FluxClient
     {
-        // 25 s per call: a webhook (up to two calls) stays under common proxy timeouts.
+        // 25 s per call: a webhook (up to three calls with the signing keys) stays under common proxy timeouts.
         return new P2FluxClient(['apiUrl' => P2fluxBridge::apiUrl($env), 'timeout' => 25]);
     }
 

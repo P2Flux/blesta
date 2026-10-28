@@ -76,5 +76,12 @@ check('invalid UTF-8 description does not throw', is_string(P2fluxBridge::sign('
 check('offer ignores expiry', P2fluxBridge::offer(['a' => '1', 'x' => 1]) === P2fluxBridge::offer(['x' => 2, 'a' => '1']));
 check('offer differs by amount', P2fluxBridge::offer(['a' => '1']) !== P2fluxBridge::offer(['a' => '2']));
 
+// merchant_ref: the invoice ids joined with ',', left out unless P2Flux accepts the result as is.
+check('one invoice -> its id', P2fluxBridge::merchantRef([['id' => '101', 'amount' => '10.00']]) === '101');
+check('no invoice -> none', P2fluxBridge::merchantRef([]) === null);
+check('several invoices -> joined with a comma, which P2Flux does not accept: left out',
+    P2fluxBridge::merchantRef([['id' => '101', 'amount' => '1.00'], ['id' => '102', 'amount' => '2.00']]) === null);
+check('longer than 64 -> left out', P2fluxBridge::merchantRef([['id' => str_repeat('9', 65), 'amount' => '1.00']]) === null);
+
 echo $failures === 0 ? "\nbridge: all checks passed\n" : "\nbridge: {$failures} FAILED\n";
 exit($failures === 0 ? 0 : 1);

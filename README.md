@@ -33,6 +33,10 @@ the payment as soon as the P2Flux API confirms it on chain, either through the c
 through P2Flux's notification to the gateway callback (retried for about 18 hours), whichever comes
 first. The transaction id is the chain transaction hash, so a repeated notification never creates a
 second payment. A payment of a different amount than the invoice is recorded as credit, not applied.
+A payment for one invoice carries the invoice id to P2Flux as `merchant_ref`, so the payment can be
+matched to the invoice in P2Flux statements (several invoices paid at once carry none). P2Flux's
+notifications are signed (`p2flux-signature`): the gateway checks the signature when it is there
+(needs PHP's sodium extension, standard since PHP 7.2) and still confirms every payment with the API.
 
 **Automatic payment.** For a recurring service, the client can choose **Pay automatically every …**.
 They approve once in their wallet; P2Flux charges the first period immediately (applied to the
@@ -70,7 +74,7 @@ P2Flux refund page, or for automatic payments send it to an address the client g
 ## Development
 
 ```
-dev/vendor-sdk.sh ../p2flux_sdk_php v0.12.0   # vendor the PHP SDK (namespace rewritten)
+dev/vendor-sdk.sh ../p2flux_sdk_php v0.15.0   # vendor the PHP SDK (namespace rewritten)
 php tests/bridge.php                           # pure rules
 php tests/gateway.php                          # the gateway on a stand-in for Blesta, offline
 php tests/flows.php                            # whole flows against a scripted P2Flux API

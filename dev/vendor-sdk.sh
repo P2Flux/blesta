@@ -4,7 +4,7 @@
 # The namespace is rewritten to P2FluxBlesta\Vendor\P2Flux, so another extension bundling its own copy
 # of the SDK can never win silently. Files are read from the release TAG, never from a working tree.
 #
-# Usage: dev/vendor-sdk.sh ../p2flux_sdk_php v0.12.0
+# Usage: dev/vendor-sdk.sh ../p2flux_sdk_php v0.15.0
 set -euo pipefail
 
 src="${1:-../p2flux_sdk_php}"
@@ -16,7 +16,7 @@ dest="$(cd "$(dirname "$0")/.." && pwd)/p2flux/vendor/p2flux"
 commit="$(git -C "$src" rev-parse --verify -q "refs/tags/$tag^{commit}")" || { echo "no tag $tag in $src" >&2; exit 1; }
 
 mkdir -p "$dest"
-for file in P2FluxException.php ChargeResult.php CurlTransport.php P2FluxClient.php; do
+for file in P2FluxException.php ChargeResult.php CurlTransport.php P2FluxClient.php Keccak.php; do
   git -C "$src" show "$tag:src/$file" | sed 's/^namespace P2Flux;$/namespace P2FluxBlesta\\Vendor\\P2Flux;/' > "$dest/$file"
 done
 git -C "$src" show "$tag:LICENSE" > "$dest/LICENSE"

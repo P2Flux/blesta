@@ -132,6 +132,9 @@ final class P2FluxClient
          * can be created for or sent to it. Nothing was submitted in either case. */
         'PAYER_SANCTIONED' => 'STOP_SUBSCRIPTION',
         'RECIPIENT_SANCTIONED' => 'INVALID_REQUEST',
+        // Signed webhooks (verifyWebhook): not signed by P2Flux, or signed too long ago.
+        'WEBHOOK_SIGNATURE_INVALID' => 'INVALID_REQUEST',
+        'WEBHOOK_TOO_OLD' => 'INVALID_REQUEST',
     ];
 
     private string $apiUrl;
@@ -154,6 +157,10 @@ final class P2FluxClient
      * its own transport never loads the class at all, which is the point: a WordPress plugin
      * vendoring this SDK must be able to ship it without shipping a curl call. */
     private static ?CurlTransport $defaultTransport = null;
+
+    /** @var null|array<string, string> The webhook signing keys from capabilities (kid => base64url). */
+    private ?array $signingKeys = null;
+    private int $signingKeysAt = 0;
 
     /**
      * @param array{apiUrl: string, timeout?: int, transport?: callable, checkoutUrl?: string} $options
@@ -187,6 +194,111 @@ final class P2FluxClient
          * stop this client from creating, verifying or charging payments. Empty means not set. */
         $checkoutUrl = $options['checkoutUrl'] ?? null;
         $this->checkoutUrl = is_string($checkoutUrl) && trim($checkoutUrl) !== '' ? trim($checkoutUrl) : null;
+    }
+
+    /**
+     * Does this on-chain `$reference` commit to your `$merchantRef`? True exactly when
+     * reference == keccak256("p2flux.merchant_ref.v1" || salt || merchant_ref), computed here with no
+     * call to P2Flux - so you, or an auditor you hand the salt to, can prove which order a payment on
+     * chain settled. `$salt` is the `reference_salt` the payment came back with. Malformed input is
+     * false. Pure PHP (P2Flux\Keccak), no extension.
+     */
+    public static function checkMerchantRef(string $reference, string $salt, string $merchantRef): bool
+    {
+        if (preg_match('/^0x[0-9a-fA-F]{64}$/', $reference) !== 1 || preg_match('/^0x[0-9a-fA-F]{64}$/', $salt) !== 1
+            || preg_match('~^[A-Za-z0-9._:/#-]{1,64}$~', $merchantRef) !== 1) {
+            return false;
+        }
+        if (!class_exists(Keccak::class)) {
+            require_once __DIR__ . '/Keccak.php';
+        }
+
+        return Keccak::hash256('p2flux.merchant_ref.v1' . hex2bin(substr($salt, 2)) . $merchantRef) === strtolower($reference);
+    }
+
+    /**
+     * Check a webhook's `p2flux-signature` header and return the decoded event.
+     *
+     * Pass the body EXACTLY as received (file_get_contents('php://input'), before any decoding) and
+     * the header's value ($_SERVER['HTTP_P2FLUX_SIGNATURE']). Throws P2FluxException
+     * `WEBHOOK_SIGNATURE_INVALID` (not signed by P2Flux, or changed) or `WEBHOOK_TOO_OLD` (signed more
+     * than `tolerance_sec` from now - a replay, or a clock to fix); both have action INVALID_REQUEST.
+     *
+     * A valid signature proves P2Flux sent this event, not that money moved: still decide on money
+     * with verifyPayment() (or handleNotification(), which does both).
+     *
+     * @param array{keys?: array<string, string>, tolerance_sec?: int, now?: int} $options
+     *        keys: kid => base64url public key; default the API's own, from capabilities(), fetched
+     *        once per client. tolerance_sec defaults to 300; now (unix seconds) is for tests.
+     * @return array<string, mixed>
+     */
+    public function verifyWebhook(string $rawBody, string $header, array $options = []): array
+    {
+        $parts = [];
+        foreach (explode(',', $header) as $part) {
+            $pair = explode('=', $part, 2);
+            if (count($pair) === 2) {
+                $parts[trim($pair[0])] = trim($pair[1]);
+            }
+        }
+        $t = $parts['t'] ?? '';
+        $kid = $parts['kid'] ?? '';
+        $invalid = new P2FluxException('WEBHOOK_SIGNATURE_INVALID', 'INVALID_REQUEST');
+        if (preg_match('/^\d{1,12}$/', $t) !== 1 || $kid === '' || ($parts['v1'] ?? '') === '') {
+            throw $invalid;
+        }
+        $key = isset($options['keys']) ? ($options['keys'][$kid] ?? null) : $this->signingKey($kid);
+        $publicKey = is_string($key) ? self::base64UrlDecode($key) : null;
+        $signature = self::base64UrlDecode($parts['v1']);
+        try {
+            $ok = $publicKey !== null && $signature !== null
+                && sodium_crypto_sign_verify_detached($signature, "{$t}.{$rawBody}", $publicKey);
+        } catch (\SodiumException) {
+            $ok = false;
+        }
+        if (!$ok) {
+            throw $invalid;
+        }
+        // Checked after the signature, so a stale answer is only ever given about a genuine P2Flux event.
+        if (abs(($options['now'] ?? time()) - (int) $t) > ($options['tolerance_sec'] ?? 300)) {
+            throw new P2FluxException('WEBHOOK_TOO_OLD', 'INVALID_REQUEST');
+        }
+        $event = json_decode($rawBody, true);
+        if (!is_array($event)) {
+            throw new P2FluxException('WEBHOOK_SIGNATURE_INVALID', 'INVALID_REQUEST', ['reason' => 'MALFORMED']);
+        }
+
+        return $event;
+    }
+
+    /**
+     * A webhook signing key by kid, from capabilities: fetched once, again for a kid not seen yet (a
+     * rotation) - but at most once a minute, so forged kids cannot make every check a fetch.
+     */
+    private function signingKey(string $kid): ?string
+    {
+        if ($this->signingKeys === null || (!isset($this->signingKeys[$kid]) && time() - $this->signingKeysAt > 60)) {
+            $keys = [];
+            foreach ($this->capabilities()['webhook_signing_keys'] ?? [] as $k) {
+                if (is_string($k['kid'] ?? null) && is_string($k['public_key'] ?? null)) {
+                    $keys[$k['kid']] = $k['public_key'];
+                }
+            }
+            $this->signingKeys = $keys;
+            $this->signingKeysAt = time();
+        }
+
+        return $this->signingKeys[$kid] ?? null;
+    }
+
+    private static function base64UrlDecode(string $value): ?string
+    {
+        if (preg_match('/^[A-Za-z0-9_-]+$/', $value) !== 1) {
+            return null;
+        }
+        $bytes = base64_decode(strtr($value, '-_', '+/'), true);
+
+        return $bytes === false ? null : $bytes;
     }
 
     /**
@@ -245,8 +357,11 @@ final class P2FluxClient
      * the mode, the allowance only reaches the recurring contract, which moves nothing the signed
      * authorization does not permit.
      *
-     * @param array{recipient: string, amount: string, period: int, end?: int, allowance?: string|array{periods: int}} $terms
-     * @return array{setup_token: string, salt: string, amount: string, ...}
+     * Optional `merchant_ref` (your own number, rules as for createPayment()): carried in the signed
+     * setup and echoed by resolveSubscription() and status(). Not part of any on-chain value.
+     *
+     * @param array{recipient: string, amount: string, period: int, end?: int, allowance?: string|array{periods: int}, merchant_ref?: string} $terms
+     * @return array{setup_token: string, salt: string, amount: string, merchant_ref?: string, ...}
      */
     public function createSubscription(array $terms): array
     {
@@ -344,8 +459,28 @@ final class P2FluxClient
      * `notify_url` is optional: a public https URL P2Flux POSTs a `payment.paid` event to once the
      * payment is verified on chain. Omit it and nothing changes. Answer it with handleNotification().
      *
-     * @param array{recipient: string, amount: string, gas_payment_mode?: 'native'|'payment_token', notify_url?: string} $terms
-     * @return array{intent: string, reference: string, amount: string, notify_url?: string, ...}
+     * `return_url` is optional: where the hosted checkout sends the buyer after paying (https; http on
+     * the test network only), with `p2flux_reference`, `p2flux_tx` and `p2flux_status` (`paid` or
+     * `confirming`) in the query. A convenience, never proof: confirm with verifyPayment() or a webhook.
+     * The answer carries `checkout_url`, P2Flux's hosted page for this payment (absent from older APIs;
+     * a self-hosted checkout uses checkoutLink() instead).
+     *
+     * `private_payment` is optional, Base only: `'hinkal'` also offers the buyer "Pay privately with
+     * Hinkal" on the hosted checkout (paid from their Hinkal private balance; native gas only). You
+     * receive the same amount and fee; such a payment cannot be refunded automatically - its
+     * verification says `accounting.refundable === false`.
+     *
+     * `merchant_ref` is optional: your own order or invoice number (ASCII letters, digits and
+     * `. _ : / # -`, 1-64 characters; no spaces, no `@`). Signed, not encrypted - the buyer can read
+     * it, so never personal data. The answer carries it back with `reference_salt`, and the on-chain
+     * `reference` then equals keccak256("p2flux.merchant_ref.v1" || reference_salt || merchant_ref),
+     * so you or an auditor can prove which order a payment settled. verifyPayment(), recoverPayment(),
+     * resolvePayment(), verifyRefund() and the payment.paid webhook echo it. Needs an API with
+     * merchant_ref (an older one refuses the field). Check the commitment with
+     * P2FluxClient::checkMerchantRef() (no API call).
+     *
+     * @param array{recipient: string, amount: string, gas_payment_mode?: 'native'|'payment_token', notify_url?: string, return_url?: string, private_payment?: 'hinkal', merchant_ref?: string} $terms
+     * @return array{intent: string, reference: string, amount: string, notify_url?: string, return_url?: string, private_payment?: 'hinkal', checkout_url?: string, merchant_ref?: string, reference_salt?: string, ...}
      */
     public function createPayment(array $terms): array
     {
@@ -452,6 +587,8 @@ final class P2FluxClient
      *     settlement_receipt?: string,
      *     gas_payment_mode?: 'native'|'payment_token',
      *     screening?: 'clear'|'sanctioned'|'unknown',
+     *     merchant_ref?: string,
+     *     reference_salt?: string,
      *     accounting?: array{
      *         payment_units: string,
      *         payment_fee_units: string,
@@ -460,6 +597,7 @@ final class P2FluxClient
      *         merchant_net_units: string,
      *         buyer_total_units: string,
      *         payer: string,
+     *         refundable?: false,
      *         ...
      *     },
      *     retry_after?: int,
@@ -509,6 +647,8 @@ final class P2FluxClient
      *     as_of_block?: int,
      *     gas_payment_mode?: 'native'|'payment_token',
      *     accounting?: array<string, string>,
+     *     merchant_ref?: string,
+     *     reference_salt?: string,
      *     ...
      * }
      */
@@ -696,11 +836,14 @@ final class P2FluxClient
      *
      * Safe to retry: the contract allows one charge per billing period, so a repeat call after a
      * timeout or a crashed worker returns ALREADY_CHARGED instead of charging again.
+     *
+     * `$merchantRef`: this charge's own invoice number (rules as for createPayment()'s merchant_ref),
+     * echoed as $result->merchantRef and by recoverCharge(). Needs an API with merchant_ref.
      */
-    public function charge(string $subscriptionRef): ChargeResult
+    public function charge(string $subscriptionRef, ?string $merchantRef = null): ChargeResult
     {
         try {
-            [, $body] = $this->post('/v1/charges', ['subscription' => $subscriptionRef]);
+            [, $body] = $this->post('/v1/charges', ['subscription' => $subscriptionRef] + ($merchantRef === null ? [] : ['merchant_ref' => $merchantRef]));
         } catch (P2FluxException $e) {
             /* The exception's raw body rides along (curl's `detail`, for one), because the place an
              * operator most needs to know WHY the API was unreachable is their renewal job's log -
@@ -720,9 +863,15 @@ final class P2FluxClient
      * the number of charges). Optional `label` (up to 60 characters, no web addresses), `expires_at`
      * (unix seconds) and, for one-time kinds, `gas_payment_mode`. Optional `notify_url`: a webhook for
      * every payment through the link (`payment.paid`, or `subscription.charged` / `subscription.updated`).
+     * Optional `return_url`: as for createPayment() (subscriptions: `p2flux_subscription` instead of
+     * `p2flux_reference`). The answer carries `checkout_url`, the hosted page for the link.
+     * Optional `private_payment` (`'hinkal'`, `once` and `reusable` links, not subscriptions): as for createPayment().
+     * Optional `merchant_ref` (rules as for createPayment()): carried in the signed link (the buyer can
+     * read it) and echoed by paymentLinkStatus() and the link's webhooks. The on-chain reference of a
+     * link payment does not commit to it. A self-hosted checkout must be new enough to accept it.
      *
-     * @param array{kind: string, recipient: string, amount: string, label?: string, expires_at?: int, gas_payment_mode?: string, period?: int, periods?: int, suspend_after_days?: int, notify_url?: string} $terms
-     * @return array{link: string, manage: string, kind: string, id: string, recipient: string, amount: string, amount_units: string, created_at: int, expires_at: int, ...}
+     * @param array{kind: string, recipient: string, amount: string, label?: string, expires_at?: int, gas_payment_mode?: string, period?: int, periods?: int, suspend_after_days?: int, notify_url?: string, return_url?: string, private_payment?: 'hinkal', merchant_ref?: string} $terms
+     * @return array{link: string, manage: string, kind: string, id: string, recipient: string, amount: string, amount_units: string, created_at: int, expires_at: int, return_url?: string, checkout_url?: string, merchant_ref?: string, ...}
      */
     public function createPaymentLink(array $terms): array
     {
@@ -800,9 +949,16 @@ final class P2FluxClient
      * does not even name your order the API is not asked. InvalidArgumentException on a missing or
      * malformed `$expect`.
      *
+     * Optional `signature`: the `p2flux-signature` header. Given, the raw body (a string) is checked
+     * first (verifyWebhook(), with `keys` / `tolerance_sec` as there) and a bad or stale one returns
+     * `confirmed => false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD.
+     *
      * @param string|array<string, mixed> $notification
-     * @param array{reference?: string, link_id?: string, manage?: string} $expect
-     * @return array{confirmed: bool, event_id: string, type: string, dedupe_key?: string, reason?: string, payment?: array<string, mixed>, subscriber?: array<string, mixed>}
+     * @param array{reference?: string, link_id?: string, manage?: string, signature?: string, keys?: array<string, string>, tolerance_sec?: int} $expect
+     * A confirmed payment.paid for a payment created with `merchant_ref` also carries `merchant_ref` and
+     * `reference_salt`, taken from the verified answer (never from the event body).
+     *
+     * @return array{confirmed: bool, event_id: string, type: string, dedupe_key?: string, reason?: string, payment?: array<string, mixed>, subscriber?: array<string, mixed>, merchant_ref?: string, reference_salt?: string}
      */
     public function handleNotification(string|array $notification, array $expect): array
     {
@@ -814,6 +970,20 @@ final class P2FluxClient
         // A malformed id would match too much ('0x' is a prefix of every reference).
         if (($reference !== '' && preg_match('/^0x[0-9a-f]{64}$/', $reference) !== 1) || ($linkId !== '' && preg_match('/^0x[0-9a-f]{32}$/', $linkId) !== 1)) {
             throw new \InvalidArgumentException('reference must be the 32-byte reference from createPayment, link_id the 16-byte link id');
+        }
+        if (isset($expect['signature'])) {
+            if (!is_string($notification)) {
+                throw new \InvalidArgumentException('signature needs the raw body as a string');
+            }
+            try {
+                $this->verifyWebhook($notification, (string) $expect['signature'], array_intersect_key($expect, ['keys' => 1, 'tolerance_sec' => 1]));
+            } catch (P2FluxException $e) {
+                if ($e->action !== 'INVALID_REQUEST') {
+                    throw $e;
+                }
+
+                return ['confirmed' => false, 'event_id' => '', 'type' => '', 'reason' => $e->status];
+            }
         }
         $event = is_string($notification) ? json_decode($notification, true) : $notification;
         if (!is_array($event)) {
@@ -866,7 +1036,8 @@ final class P2FluxClient
             }
 
             return ['confirmed' => true, 'event_id' => $eventId, 'type' => $type,
-                'dedupe_key' => strtolower((string) $verdict['reference']) . ':' . strtolower((string) ($verdict['tx_hash'] ?? '')), 'payment' => $verdict];
+                'dedupe_key' => strtolower((string) $verdict['reference']) . ':' . strtolower((string) ($verdict['tx_hash'] ?? '')), 'payment' => $verdict]
+                + array_filter(['merchant_ref' => $verdict['merchant_ref'] ?? null, 'reference_salt' => $verdict['reference_salt'] ?? null], 'is_string');
         }
 
         if ($type === 'subscription.charged' || $type === 'subscription.updated') {
@@ -969,6 +1140,37 @@ final class P2FluxClient
     public function prepareSubscriptionCancellation(string $subscriptionRef): array
     {
         [$httpStatus, $body] = $this->post('/v1/subscriptions/revoke/prepare', ['subscription' => $subscriptionRef]);
+        $this->throwIfError($httpStatus, $body);
+
+        return $body;
+    }
+
+    /**
+     * What P2Flux did with the webhooks of one payment (`['intent' => ...]`) or one payment link
+     * (`['manage' => ...]`): every event, every attempt's time, HTTP status (0 = no answer) and
+     * duration, and when the next try is due. Kept 7 days; no bodies, no URLs.
+     *
+     * @param array{intent?: string, manage?: string} $token
+     * @return array{events: list<array{id: string, type: string, created_at: int, attempts: list<array{at: int, status: int, duration_ms: int}>, next_at: int|null, outcome: string}>, ...}
+     */
+    public function webhookDeliveries(array $token): array
+    {
+        [$httpStatus, $body] = $this->post('/v1/webhooks/deliveries', $token);
+        $this->throwIfError($httpStatus, $body);
+
+        return $body;
+    }
+
+    /**
+     * "Retry now" for one webhook event that is still pending (see webhookDeliveries()): P2Flux sends
+     * it at once instead of at its next scheduled try. At most 3 times per event per hour.
+     *
+     * @param array{intent?: string, manage?: string} $token
+     * @return array<string, mixed>
+     */
+    public function redeliverWebhook(array $token, string $eventId): array
+    {
+        [$httpStatus, $body] = $this->post('/v1/webhooks/redeliver', $token + ['event_id' => $eventId]);
         $this->throwIfError($httpStatus, $body);
 
         return $body;

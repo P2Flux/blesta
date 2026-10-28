@@ -98,11 +98,11 @@ check('the webhook address is the public base, not the request host', str_starts
 check('second click reuses the same payment', outcome(fn () => harness_gateway($meta)->validate($pay, [])) === $first && $api['payments'] === 1);
 check('the payment carries the invoice id as merchant_ref', ($api['last']['/v1/payments']['merchant_ref'] ?? null) === '101');
 
-// Two invoices at once: "101,102" is not a merchant_ref P2Flux accepts, so none is sent.
+// Two invoices at once: both ids, joined with "/".
 $multi = harness_gateway($meta)->buildProcess(['client_id' => 7], 30.0, [['id' => 101, 'amount' => 10.0], ['id' => 102, 'amount' => 20.0]], ['description' => 'Invoices']);
 parse_str(parse_url($multi['pay_url'], PHP_URL_QUERY), $payMulti);
 outcome(fn () => harness_gateway($meta)->validate($payMulti, []));
-check('two invoices: no merchant_ref', $api['payments'] === 2 && !array_key_exists('merchant_ref', $api['last']['/v1/payments']));
+check('two invoices: merchant_ref 101/102', $api['payments'] === 2 && ($api['last']['/v1/payments']['merchant_ref'] ?? null) === '101/102');
 
 // An API that does not know merchant_ref yet: the payment is still created, once more without it.
 $api['old'] = true;

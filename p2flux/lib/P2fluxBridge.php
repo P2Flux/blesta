@@ -135,7 +135,7 @@ final class P2fluxBridge
      */
     public static function merchantRef(array $invoices): ?string
     {
-        $ref = implode(',', array_column($invoices, 'id'));
+        $ref = implode('/', array_column($invoices, 'id'));
 
         return preg_match('~^[A-Za-z0-9._:/#-]{1,64}$~', $ref) === 1 ? $ref : null;
     }

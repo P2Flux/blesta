@@ -8,6 +8,7 @@
  */
 putenv('HARNESS_DB=' . sys_get_temp_dir() . '/p2flux-blesta-flows-' . getmypid() . '.json');
 require __DIR__ . '/harness/gateway.php';
+ob_start(); // output is held back so the webhook's HTTP status can be set and read (http_response_code)
 
 $failures = 0;
 function check(string $label, bool $ok): void
@@ -174,15 +175,26 @@ $sign = static fn (string $body, int $t, string $kid = 'k1') => "t=$t,kid=$kid,v
 $signed = $charge(1, $owner, 4, $tag);
 $_SERVER['HTTP_P2FLUX_SIGNATURE'] = $sign($signed . ' ', time());
 $statusCalls = count(array_keys($api['calls'], '/v1/links/status', true));
-check('a bad signature is refused', $hook($meta, $subRow['id'], $signed) === null);
+$codes = [];
+$hookStatus = static function (string $body) use ($hook, $meta, $subRow, &$codes) {
+    http_response_code(200);
+    $r = $hook($meta, $subRow['id'], $body);
+    $codes[] = http_response_code();
+
+    return $r;
+};
+check('a bad signature is refused', $hookStatus($signed) === null);
+check('...with HTTP 401, so P2Flux retries it and it shows in the delivery history', end($codes) === 401);
 check('...before the API is asked', count(array_keys($api['calls'], '/v1/links/status', true)) === $statusCalls);
-$_SERVER['HTTP_P2FLUX_SIGNATURE'] = $sign($signed, time() - 600);
-check('a signature older than five minutes is refused', $hook($meta, $subRow['id'], $signed) === null);
 $_SERVER['HTTP_P2FLUX_SIGNATURE'] = $sign($signed, time(), 'k2');
-check('an unknown key is refused', $hook($meta, $subRow['id'], $signed) === null);
+check('an unknown key is refused', $hookStatus($signed) === null && end($codes) === 401);
+$_SERVER['HTTP_P2FLUX_SIGNATURE'] = $sign($signed, time() - 600);
+$stale = $hookStatus($signed);
+check('a signature older than five minutes (clock skew) is not lost: the API decides, and it is credited', is_array($stale) && $stale['transaction_id'] === $hex("tx-$owner-4", 32) && end($codes) === 200);
+$signed = $charge(1, $owner, 5, $tag);
 $_SERVER['HTTP_P2FLUX_SIGNATURE'] = $sign($signed, time());
 $good = $hook($meta, $subRow['id'], $signed);
-check('a good signature is credited', is_array($good) && $good['transaction_id'] === $hex("tx-$owner-4", 32));
+check('a good signature is credited', is_array($good) && $good['transaction_id'] === $hex("tx-$owner-5", 32));
 check('...after asking the API as before', count(array_keys($api['calls'], '/v1/links/status', true)) > $statusCalls);
 unset($_SERVER['HTTP_P2FLUX_SIGNATURE']);
 

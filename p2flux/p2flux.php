@@ -500,6 +500,19 @@ class P2flux extends NonmerchantGateway
             $this->log($this->requestUri(), json_encode(['warning' => 'signature not checked: PHP has no sodium extension']), 'output', false);
         }
         $result = $client->handleNotification($body, $expect);
+        if (isset($expect['signature']) && ($result['reason'] ?? '') === 'WEBHOOK_TOO_OLD') {
+            /* A genuine P2Flux signature, just older than five minutes: clock skew must not lose a payment.
+             * The API's verdict decides, exactly as for an unsigned webhook. */
+            $this->log($this->requestUri(), json_encode(['warning' => 'WEBHOOK_TOO_OLD: check the server clock; confirmed with the API']), 'output', false);
+            unset($expect['signature']);
+            $result = $client->handleNotification($body, $expect);
+        } elseif (isset($expect['signature']) && ($result['reason'] ?? '') === 'WEBHOOK_SIGNATURE_INVALID') {
+            // Not from P2Flux (or an unknown key): a 4xx, never a 2xx, so a real event is retried and shows in the delivery history.
+            $this->log($this->requestUri(), json_encode(['type' => $result['type'], 'confirmed' => false, 'reason' => $result['reason']]), 'output', false);
+            http_response_code(401);
+
+            return;
+        }
         // Not confirmed is logged as a failure: NOT_CURRENT means a period was missed while Blesta was unreachable.
         $this->log($this->requestUri(), json_encode(['type' => $result['type'], 'confirmed' => $result['confirmed'], 'reason' => $result['reason'] ?? null]), 'output', $result['confirmed']);
         if (!$result['confirmed']) {

@@ -37,7 +37,10 @@ A payment carries the invoice number bookkeepers see (Blesta's invoice id code, 
 P2Flux as `merchant_ref`, so the payment can be matched to the invoice in P2Flux statements (several
 invoices paid at once are joined with `/`; left out when longer than 64 characters). P2Flux's
 notifications are signed (`p2flux-signature`): the gateway checks the signature when it is there
-(needs PHP's sodium extension, standard since PHP 7.2) and still confirms every payment with the API.
+(needs PHP's sodium extension, standard since PHP 7.2) and still confirms every payment with the API. A
+bad or unknown-key signature is answered `401`, so P2Flux retries it and it shows in the delivery history;
+a genuine but stale one (server clock off by more than five minutes) is confirmed with the API, so clock
+skew never loses a payment.
 
 **Automatic payment.** For a recurring service, the client can choose **Pay automatically every …**.
 They approve once in their wallet; P2Flux charges the first period immediately (applied to the

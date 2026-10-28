@@ -8,8 +8,8 @@
   `400 INVALID_REQUEST` without naming the field), the payment is asked for once more without it, and that
   environment is remembered for an hour (a file in the system temp dir) so later payments go once.
 - Signed webhooks: a `p2flux-signature` header is checked with the SDK (keys from the API's
-  capabilities, five-minute window) before the API is asked; a bad, stale or unknown-key signature is
-  refused. Webhooks without the header are confirmed with the API as before. Without PHP's sodium
+  capabilities, five-minute window) before the API is asked; a bad or unknown-key signature is answered
+  `401` (retried, visible in the delivery history); a stale one (clock skew) is confirmed with the API. Webhooks without the header are confirmed with the API as before. Without PHP's sodium
   extension the signature is not checked (logged) and the API check still applies.
 - Vendored SDK: sdk-php 0.15.0 (adds `Keccak.php`).
 

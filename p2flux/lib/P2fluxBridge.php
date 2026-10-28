@@ -130,14 +130,15 @@ final class P2fluxBridge
     }
 
     /**
-     * The invoice ids joined with ',' as P2Flux's merchant_ref, or null when P2Flux would not accept
-     * that as is (more than 64 characters, or a character outside its set - which ',' is).
+     * The invoice numbers bookkeepers see ('code', Blesta's id_code; the id when there is none) joined
+     * with '/' as P2Flux's merchant_ref, or null when P2Flux would not accept that as is (more than 64
+     * characters, or a character outside its set).
      */
     public static function merchantRef(array $invoices): ?string
     {
-        $ref = implode('/', array_column($invoices, 'id'));
+        $ref = implode('/', array_map(static fn (array $i): string => (string) ($i['code'] ?? $i['id'] ?? ''), $invoices));
 
-        return preg_match('~^[A-Za-z0-9._:/#-]{1,64}$~', $ref) === 1 ? $ref : null;
+        return preg_match('~^[A-Za-z0-9._:/#-]{1,64}$~D', $ref) === 1 ? $ref : null;
     }
 
     /** The P2Flux checkout's origin for the environment: messages from the popup are accepted from it only. */

@@ -374,7 +374,7 @@ class P2flux extends NonmerchantGateway
             'recipient' => $this->meta['recipient'],
             'amount' => $data['a'],
             'notify_url' => $this->callbackUrl(['a' => 'hook', 'k' => $recordId]),
-        ] + array_filter(['merchant_ref' => P2fluxBridge::merchantRef($data['i'] ?? [])], 'is_string');
+        ] + array_filter(['merchant_ref' => self::noMerchantRef($data['e']) ? null : P2fluxBridge::merchantRef($this->invoiceCodes($data['i'] ?? []))], 'is_string');
         if (($this->meta['gas_mode'] ?? 'false') === 'true') {
             try {
                 return $this->create($client, $terms + ['gas_payment_mode' => 'payment_token']);
@@ -392,7 +392,8 @@ class P2flux extends NonmerchantGateway
     /**
      * An API older than merchant_ref refuses the unknown field as INVALID_REQUEST without naming it, and
      * has no flag that says it is supported: then the same payment is asked for once more without it. A
-     * refusal creates nothing, and a request wrong for another reason is refused again.
+     * refusal creates nothing, and a request wrong for another reason is refused again. When the resend
+     * goes through, that environment is remembered for an hour (noMerchantRef) and merchant_ref left out.
      */
     private function create(P2FluxClient $client, array $terms): array
     {
@@ -403,9 +404,49 @@ class P2flux extends NonmerchantGateway
                 throw $e;
             }
             unset($terms['merchant_ref']);
+            $created = $client->createPayment($terms);
+            self::noMerchantRef($this->env(), true);
 
-            return $client->createPayment($terms);
+            return $created;
         }
+    }
+
+    /** File prefix (in the system temp dir) of the "this API has no merchant_ref" memo, per environment. */
+    public const NO_MERCHANT_REF_MEMO = 'p2flux-blesta-no-merchant-ref-';
+
+    /** @var array<string, int> environment => until (unix seconds), this process's copy of the memo. */
+    private static array $noMerchantRefUntil = [];
+
+    /** Whether the environment's API was found without merchant_ref within the hour; $remember records that now. */
+    private static function noMerchantRef(string $env, bool $remember = false): bool
+    {
+        $file = sys_get_temp_dir() . '/' . self::NO_MERCHANT_REF_MEMO . md5(P2fluxBridge::apiUrl($env));
+        if ($remember) {
+            self::$noMerchantRefUntil[$env] = time() + 3600;
+            @touch($file);
+
+            return true;
+        }
+        if (!isset(self::$noMerchantRefUntil[$env])) {
+            $at = @filemtime($file);
+            self::$noMerchantRefUntil[$env] = $at === false ? 0 : $at + 3600;
+        }
+
+        return self::$noMerchantRefUntil[$env] > time();
+    }
+
+    /** The invoices with Blesta's id_code (the number bookkeepers see) as 'code', when it has one. */
+    private function invoiceCodes(array $invoices): array
+    {
+        Loader::loadModels($this, ['Invoices']);
+        foreach ($invoices as &$invoice) {
+            $code = $this->Invoices->get((int) $invoice['id'])->id_code ?? null;
+            if (is_string($code) && $code !== '') {
+                $invoice['code'] = $code;
+            }
+        }
+
+        return $invoices;
     }
 
     /** The buyer's browser reports a transaction: ask the API whether it pays this record's intent. */

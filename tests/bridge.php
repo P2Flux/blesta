@@ -81,6 +81,8 @@ check('one invoice -> its id', P2fluxBridge::merchantRef([['id' => '101', 'amoun
 check('no invoice -> none', P2fluxBridge::merchantRef([]) === null);
 check('two invoices -> 101/102',
     P2fluxBridge::merchantRef([['id' => '101', 'amount' => '1.00'], ['id' => '102', 'amount' => '2.00']]) === '101/102');
+check('the invoice number bookkeepers see (code) wins over the id', P2fluxBridge::merchantRef([['id' => '101', 'code' => 'INV-101', 'amount' => '1.00'], ['id' => '102', 'amount' => '2.00']]) === 'INV-101/102');
+check('a trailing newline is not accepted (anchored with D)', P2fluxBridge::merchantRef([['id' => '101', 'code' => "INV-101\n", 'amount' => '1.00']]) === null);
 check('longer than 64 -> left out', P2fluxBridge::merchantRef([['id' => str_repeat('9', 65), 'amount' => '1.00']]) === null);
 
 echo $failures === 0 ? "\nbridge: all checks passed\n" : "\nbridge: {$failures} FAILED\n";

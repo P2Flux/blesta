@@ -33,8 +33,9 @@ the payment as soon as the P2Flux API confirms it on chain, either through the c
 through P2Flux's notification to the gateway callback (retried for about 18 hours), whichever comes
 first. The transaction id is the chain transaction hash, so a repeated notification never creates a
 second payment. A payment of a different amount than the invoice is recorded as credit, not applied.
-A payment for one invoice carries the invoice id to P2Flux as `merchant_ref`, so the payment can be
-matched to the invoice in P2Flux statements (several invoices paid at once carry none). P2Flux's
+A payment carries the invoice number bookkeepers see (Blesta's invoice id code, e.g. `INV-101`) to
+P2Flux as `merchant_ref`, so the payment can be matched to the invoice in P2Flux statements (several
+invoices paid at once are joined with `/`; left out when longer than 64 characters). P2Flux's
 notifications are signed (`p2flux-signature`): the gateway checks the signature when it is there
 (needs PHP's sodium extension, standard since PHP 7.2) and still confirms every payment with the API.
 

@@ -31,6 +31,16 @@ function rows(): array
     return json_decode((string) @file_get_contents(getenv('HARNESS_DB')), true)['p2flux_records'] ?? [];
 }
 
+/** Clears the "API has no merchant_ref" memo: its files and this process's copy. */
+function forget_no_merchant_ref(): void
+{
+    foreach (glob(sys_get_temp_dir() . '/' . P2flux::NO_MERCHANT_REF_MEMO . '*') ?: [] as $f) {
+        unlink($f);
+    }
+    (new ReflectionProperty(P2flux::class, 'noMerchantRefUntil'))->setValue(null, []);
+}
+forget_no_merchant_ref();
+
 // --- scripted API -----------------------------------------------------------------------------
 $api = ['calls' => [], 'subscribers' => [], 'stopped' => [], 'payments' => 0, 'links' => 0];
 $hex = static fn (string $seed, int $bytes) => '0x' . substr(hash('sha256', $seed), 0, $bytes * 2);
@@ -84,6 +94,7 @@ $hook = static function (array $meta, string $record, string $body) {
     return $m->invoke($g, $row, $body);
 };
 
+putenv('HARNESS_MODELS={"Invoices":{"101":{"id_code":"INV-101"},"102":{"id_code":"INV-102"}}}');
 $meta = ['recipient' => '0x' . str_repeat('ab', 20), 'environment' => 'test', 'gas_mode' => 'false', 'subscriptions' => 'true', 'callback_base' => 'https://pub.example.com/callback/gw'];
 $view = harness_gateway($meta)->buildProcess(['client_id' => 7], 10.0, [['id' => 101, 'amount' => 10.0]], [
     'description' => 'Invoice #101', 'recur' => ['amount' => 10.0, 'term' => 1, 'period' => 'month'],
@@ -96,13 +107,13 @@ $first = outcome(fn () => harness_gateway($meta)->validate($pay, []));
 check('start -> checkout for the minted intent', $first === 'redirect:https://pay-test.p2flux.com/#/pay/p2f1.intent1');
 check('the webhook address is the public base, not the request host', str_starts_with($api['last']['/v1/payments']['notify_url'] ?? '', 'https://pub.example.com/callback/gw/1/p2flux/?a=hook&k='));
 check('second click reuses the same payment', outcome(fn () => harness_gateway($meta)->validate($pay, [])) === $first && $api['payments'] === 1);
-check('the payment carries the invoice id as merchant_ref', ($api['last']['/v1/payments']['merchant_ref'] ?? null) === '101');
+check('the payment carries the invoice number bookkeepers see (id_code) as merchant_ref', ($api['last']['/v1/payments']['merchant_ref'] ?? null) === 'INV-101');
 
 // Two invoices at once: both ids, joined with "/".
 $multi = harness_gateway($meta)->buildProcess(['client_id' => 7], 30.0, [['id' => 101, 'amount' => 10.0], ['id' => 102, 'amount' => 20.0]], ['description' => 'Invoices']);
 parse_str(parse_url($multi['pay_url'], PHP_URL_QUERY), $payMulti);
 outcome(fn () => harness_gateway($meta)->validate($payMulti, []));
-check('two invoices: merchant_ref 101/102', $api['payments'] === 2 && ($api['last']['/v1/payments']['merchant_ref'] ?? null) === '101/102');
+check('two invoices: merchant_ref INV-101/INV-102', $api['payments'] === 2 && ($api['last']['/v1/payments']['merchant_ref'] ?? null) === 'INV-101/INV-102');
 
 // An API that does not know merchant_ref yet: the payment is still created, once more without it.
 $api['old'] = true;
@@ -112,7 +123,14 @@ $before = count(array_keys($api['calls'], '/v1/payments', true));
 $res = outcome(fn () => harness_gateway($meta)->validate($payOlder, []));
 check('old API: checkout opens for the payment created without merchant_ref', $res === 'redirect:https://pay-test.p2flux.com/#/pay/p2f1.intent3'
     && count(array_keys($api['calls'], '/v1/payments', true)) - $before === 2 && !array_key_exists('merchant_ref', $api['last']['/v1/payments']));
+$older2 = harness_gateway($meta)->buildProcess(['client_id' => 7], 7.0, [['id' => 105, 'amount' => 7.0]], ['description' => 'Invoice #105']);
+parse_str(parse_url($older2['pay_url'], PHP_URL_QUERY), $payOlder2);
+$before = count(array_keys($api['calls'], '/v1/payments', true));
+outcome(fn () => harness_gateway($meta)->validate($payOlder2, []));
+check('old API remembered for an hour: the next payment goes once, without merchant_ref',
+    count(array_keys($api['calls'], '/v1/payments', true)) - $before === 1 && !array_key_exists('merchant_ref', $api['last']['/v1/payments']));
 $api['old'] = false;
+forget_no_merchant_ref(); // the hour is over: the API was upgraded
 $broken = harness_gateway($meta)->buildProcess(['client_id' => 7], 6.0, [['id' => 104, 'amount' => 6.0]], ['description' => 'Invoice #104']);
 parse_str(parse_url($broken['pay_url'], PHP_URL_QUERY), $payBroken);
 $before = count(array_keys($api['calls'], '/v1/payments', true));

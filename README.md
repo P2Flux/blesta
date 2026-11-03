@@ -30,7 +30,7 @@ and a Blesta address that P2Flux can reach over **https** for confirmations.
 **One-time payment.** The client clicks **Pay with USDC**; P2Flux's checkout opens in a small window
 and the client pays from their own wallet (MetaMask, Rabby, or a phone wallet via QR). Blesta records
 the payment as soon as the P2Flux API confirms it on chain, either through the client's browser or
-through P2Flux's notification to the gateway callback (retried for about 18 hours), whichever comes
+through P2Flux's notification to the gateway callback (retried for about 21 hours), whichever comes
 first. The transaction id is the chain transaction hash, so a repeated notification never creates a
 second payment. A payment of a different amount than the invoice is recorded as credit, not applied.
 A payment carries the invoice number bookkeepers see (Blesta's invoice id code, e.g. `INV-101`) to
@@ -58,7 +58,7 @@ recorded: each payment is checked on the network it was made on.)
 **One subscription per link.** Each automatic payment uses its own P2Flux link. The first wallet that
 subscribes through it is the client's; anyone else who subscribes through the same link is stopped and
 never credited. A client who stops and later subscribes again gets a new link of their own.
-If P2Flux cannot reach Blesta for longer than its retry window (about 18 hours) and a newer period is
+If P2Flux cannot reach Blesta for longer than its retry window (about 21 hours) and a newer period is
 collected meanwhile, the older period is not recorded automatically: the gateway log shows it as
 `NOT_CURRENT`, and the P2Flux overview lists every charge. A cancelled service is recognised from the
 invoice's service lines; an invoice without a service line keeps collecting until the client stops it.

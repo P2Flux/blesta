@@ -85,7 +85,7 @@ php tests/flows.php                            # whole flows against a scripted 
 dev/docker-compose.yml                         # local Blesta 6 (needs the Blesta zip and a licence)
 tests/harness/                                 # a stand-in for Blesta's classes, to run the gateway
                                                # against the P2Flux test API without Blesta
-dev/package.sh 1.0.0                           # release zip
+dev/package.sh 1.0.1                           # release zip
 ```
 
 Docs: https://p2flux.com/docs/blesta.html · Licence: MIT

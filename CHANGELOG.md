@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 - unreleased
+## 1.1.0 - 2026-11-04
 
 - A payment sends its invoice number(s) as bookkeepers see them (Blesta's id code, e.g. `INV-101`; the id
   when there is none) as `merchant_ref` (several invoices joined with `/`, e.g. `INV-101/INV-102`; left out
